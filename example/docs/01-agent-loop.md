@@ -72,7 +72,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import anthropic
+from dotenv import load_dotenv
 from .tools import execute_tool, get_tool_definitions
+
+# 加载 .env 文件中的环境变量（如 ANTHROPIC_API_KEY）
+load_dotenv()
 
 
 @dataclass
@@ -94,6 +98,25 @@ class Agent:
         self._client = anthropic.AsyncAnthropic()  # 异步 Anthropic API 客户端
         self._messages: list[dict] = []  # 消息历史：Agent 的工作记忆
 ```
+
+#### 配置 API 密钥
+
+`anthropic.AsyncAnthropic()` 初始化时会自动读取环境变量 `ANTHROPIC_API_KEY`。我们使用 `python-dotenv` 库从 `.env` 文件加载环境变量，避免在终端历史中暴露密钥。
+
+首先安装依赖：
+
+```bash
+pip install python-dotenv
+```
+
+然后在项目根目录创建 `.env` 文件：
+
+```bash
+# .env
+ANTHROPIC_API_KEY=sk-ant-api03-xxx  # 替换成你的真实密钥
+```
+
+> ⚠️ **安全提示**：`.env` 文件包含敏感信息，务必将其加入 `.gitignore`，不要提交到版本控制。
 
 `_messages` 是核心数据结构。它的增长方式：
 
@@ -458,28 +481,14 @@ if not tool_uses:
 
 ### 输入
 
-在终端中设置环境变量并运行我们刚才实现的模块入口（根据你的操作系统选择相应的环境变量设置命令）：
+确保已在项目根目录的 `.env` 文件中配置了 `ANTHROPIC_API_KEY`（参见步骤 1），然后运行：
 
-**macOS / Linux**:
 ```bash
 cd python
-export ANTHROPIC_API_KEY=sk-ant-xxx  # 替换成你的 key
 python -m mini_claude "列出当前目录下所有 .py 文件"
 ```
 
-**Windows (PowerShell)**:
-```powershell
-cd python
-$env:ANTHROPIC_API_KEY="sk-ant-xxx"  # 替换成你的 key
-python -m mini_claude "列出当前目录下所有 .py 文件"
-```
-
-**Windows (CMD)**:
-```cmd
-cd python
-set ANTHROPIC_API_KEY=sk-ant-xxx  # 替换成你的 key
-python -m mini_claude "列出当前目录下所有 .py 文件"
-```
+> 💡 如果不想使用 `.env` 文件，也可以通过环境变量临时设置：`ANTHROPIC_API_KEY=sk-ant-xxx python -m mini_claude "..."`
 
 ### 预期结果
 

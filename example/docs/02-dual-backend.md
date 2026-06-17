@@ -467,6 +467,64 @@ class MessageHistory:
 
 ---
 
+## 🔌 第三方兼容 API 接入
+
+双后端架构不仅支持 Anthropic 官方 API 和 OpenAI 官方 API，还支持各种第三方兼容 API。
+
+### Anthropic 兼容格式（如 OpenRouter、中转代理）
+
+许多第三方服务提供 Anthropic 兼容的 API 接口（如 OpenRouter、各类中转代理）。只需设置 `ANTHROPIC_BASE_URL` 环境变量，无需修改代码：
+
+```bash
+# .env
+ANTHROPIC_API_KEY=your-api-key
+ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1  # 或你的代理地址
+```
+
+Anthropic SDK 会自动读取 `ANTHROPIC_BASE_URL` 环境变量。在 `__main__.py` 中，我们通过 `anthropic_base_url` 参数传递给 Agent：
+
+```python
+# __main__.py 中新增：读取 Anthropic 兼容后端配置
+anthropic_base_url = os.environ.get("ANTHROPIC_BASE_URL")
+agent = Agent(
+    model=model,
+    api_base=api_base,
+    anthropic_base_url=anthropic_base_url,
+    api_key=api_key,
+)
+```
+
+Agent 初始化时会根据 `anthropic_base_url` 决定是否使用自定义地址：
+
+```python
+# agent.py 中的客户端初始化
+if self.use_openai:
+    self._openai_client = openai.AsyncOpenAI(base_url=api_base, api_key=api_key)
+else:
+    kwargs = {}
+    if api_key:
+        kwargs["api_key"] = api_key
+    if anthropic_base_url:
+        kwargs["base_url"] = anthropic_base_url
+    self._anthropic_client = anthropic.AsyncAnthropic(**kwargs)
+```
+
+### OpenAI 兼容格式（如 DeepSeek、Ollama、vLLM）
+
+前面已详细说明，通过设置 `OPENAI_BASE_URL` 即可接入任意 OpenAI 兼容的 API。
+
+### 环境变量速查表
+
+| 后端类型 | 必填变量 | 可选变量 | 典型场景 |
+| --- | --- | --- | --- |
+| Anthropic 官方 | `ANTHROPIC_API_KEY` | — | 直连 Claude API |
+| Anthropic 兼容 | `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` | — | OpenRouter、中转代理 |
+| OpenAI 兼容 | `OPENAI_API_KEY` + `OPENAI_BASE_URL` | `MODEL` | DeepSeek、Ollama、vLLM |
+
+> 💡 当同时配置了 `OPENAI_BASE_URL` 和 `ANTHROPIC_BASE_URL` 时，`OPENAI_BASE_URL` 优先（因为 `api_base` 存在即启用 OpenAI 模式）。
+
+---
+
 ## ⚖️ 设计权衡
 
 ### 方案 A：共用同一个 `_messages` 列表

@@ -165,25 +165,25 @@ mini-claude --max-cost 0.50 --max-turns 20  # 预算控制
 | 章节 | mini-claude 文件 | Claude Code 对应源码 |
 |------|-----------------|---------------------|
 | **Phase 1: 构建一个可用的 Coding Agent** | | |
-| [1. Agent Loop](docs/01-agent-loop.md) | `agent.py` 的 `_chat_anthropic()` | `src/query.ts` 的 `queryLoop` |
-| [2. 双后端架构](docs/02-dual-backend.md) | `agent.py` 的 `_chat_anthropic()` + `_chat_openai()` | `src/services/api/` |
-| [3. 工具系统](docs/03-tools.md) | `tools.py` | `src/Tool.ts` + `src/tools/` (66+ 工具) |
-| [4. System Prompt](docs/04-system-prompt.md) | `prompt.py` | `src/constants/prompts.ts` |
-| [5. CLI 与会话](docs/05-cli-session.md) | `__main__.py` + `session.py` | `src/entrypoints/cli.tsx` |
-| [6. 流式工具执行](docs/06-streaming-tools.md) | `agent.py` 的 `early_executions` + `_on_tool_block_complete` | `src/query.ts` 的 `StreamingToolExecutor` |
-| [7. 流式输出](docs/07-streaming.md) | `agent.py` 的两套 stream 方法 | `src/services/api/claude.ts` |
-| [8. 权限与安全](docs/08-permissions.md) | `tools.py` 的 `check_permission()` + 规则配置 | `src/utils/permissions/` (52KB) |
-| [9. 上下文管理](docs/09-context.md) | `agent.py` 的 `_check_and_compact()` | `src/services/compact/` |
+| [1. Agent Loop](01-agent-loop.md) | `agent.py` 的 `_chat_anthropic()` | `src/query.ts` 的 `queryLoop` |
+| [2. 双后端架构](02-dual-backend.md) | `agent.py` 的 `_chat_anthropic()` + `_chat_openai()` | `src/services/api/` |
+| [3. 工具系统](03-tools.md) | `tools.py` | `src/Tool.ts` + `src/tools/` (66+ 工具) |
+| [4. System Prompt](04-system-prompt.md) | `prompt.py` | `src/constants/prompts.ts` |
+| [5. CLI 与会话](05-cli-session.md) | `__main__.py` + `session.py` | `src/entrypoints/cli.tsx` |
+| [6. 流式工具执行](06-streaming-tools.md) | `agent.py` 的 `early_executions` + `_on_tool_block_complete` | `src/query.ts` 的 `StreamingToolExecutor` |
+| [7. 流式输出](07-streaming.md) | `agent.py` 的两套 stream 方法 | `src/services/api/claude.ts` |
+| [8. 权限与安全](08-permissions.md) | `tools.py` 的 `check_permission()` + 规则配置 | `src/utils/permissions/` (52KB) |
+| [9. 上下文管理](09-context.md) | `agent.py` 的 `_check_and_compact()` | `src/services/compact/` |
 | **Phase 2: 进阶能力** | | |
-| [10. 记忆系统](docs/10-memory.md) | `memory.py` | `src/utils/memory.ts` |
-| [11. 技能系统](docs/11-skills.md) | `skills.py` | `src/utils/skills.ts` + `src/tools/SkillTool/` |
-| [12. Plan Mode](docs/12-plan-mode.md) | `agent.py` + `tools.py` + `__main__.py` | `EnterPlanMode` / `ExitPlanMode` |
-| [13. 预算控制](docs/13-budget-control.md) | `agent.py` 的 `_check_budget()` | `src/query.ts` 的预算检查 |
-| [14. 多 Agent](docs/14-multi-agent.md) | `subagent.py` + `agent.py` | `src/tools/AgentTool/` |
-| [15. MCP 集成](docs/15-mcp.md) | `mcp_client.py` | `src/services/mcpClient.ts` |
-| [16. 测试与调试](docs/16-testing.md) | 全项目 | — |
+| [10. 记忆系统](10-memory.md) | `memory.py` | `src/utils/memory.ts` |
+| [11. 技能系统](11-skills.md) | `skills.py` | `src/utils/skills.ts` + `src/tools/SkillTool/` |
+| [12. Plan Mode](12-plan-mode.md) | `agent.py` + `tools.py` + `__main__.py` | `EnterPlanMode` / `ExitPlanMode` |
+| [13. 预算控制](13-budget-control.md) | `agent.py` 的 `_check_budget()` | `src/query.ts` 的预算检查 |
+| [14. 多 Agent](14-multi-agent.md) | `subagent.py` + `agent.py` | `src/tools/AgentTool/` |
+| [15. MCP 集成](15-mcp.md) | `mcp_client.py` | `src/services/mcpClient.ts` |
+| [16. 测试与调试](16-testing.md) | 全项目 | — |
 | **附录** | | |
-| [A. 架构对比](docs/17-whats-next.md) | 全局对比 | 全局对比 |
+| [A. 架构对比](17-whats-next.md) | 全局对比 | 全局对比 |
 
 ---
 

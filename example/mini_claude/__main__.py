@@ -8,6 +8,11 @@ import os
 import signal
 import sys
 
+from dotenv import load_dotenv
+
+# 加载 .env 文件中的环境变量（如 ANTHROPIC_API_KEY）
+load_dotenv()
+
 from .agent import Agent
 from .ui import print_welcome, print_user_prompt, print_error, print_info, print_plan_for_approval, print_plan_approval_options
 from .session import load_session, get_latest_session_id
