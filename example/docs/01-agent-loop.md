@@ -219,7 +219,7 @@ Agent：用户问 → LLM 决定调用工具 → 执行工具 → 结果喂回 L
             # 工具结果用 role: "user" 推入——这是 Anthropic API 的协议要求
             self._messages.append({"role": "user", "content": tool_results})
 
-        # 输出最终回复
+        # 输出最终回复——当前用 print 直接输出，到第 7 课会替换为流式字符渲染（_emit_text）
         for block in response.content:
             if block.type == "text":
                 print(block.text)

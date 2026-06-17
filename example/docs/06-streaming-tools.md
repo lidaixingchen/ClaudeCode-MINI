@@ -327,6 +327,11 @@ LARGE_RESULT_PREVIEW_LINES = 200        # 预览保留的行数
 
             # 将所有工具执行结果追加到历史，供下一轮对话使用
             self.history.append_tool_results(tool_results)
+
+        # 输出最终回复（临时方案，第 7 课会替换为流式字符渲染）
+        for block in response.content:
+            if block.type == "text":
+                print(block.text)
 ```
 
 ---

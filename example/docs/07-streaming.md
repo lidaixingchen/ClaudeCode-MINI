@@ -15,6 +15,21 @@
 
 ---
 
+## ⚠️ 前置准备：移除临时输出代码
+
+从第 1 课到第 6 课，我们一直在 `_chat_anthropic` 和 `_chat_openai` 循环末尾使用以下临时代码输出回复：
+
+```python
+# 临时方案——本课将移除
+for block in response.content:
+    if block.type == "text":
+        print(block.text)
+```
+
+本课实现流式输出后，文本会在 API 响应过程中逐字实时打印，循环结束后不再需要额外输出。请在开始本课前，**删除 `_chat_anthropic` 和 `_chat_openai` 循环末尾的这段 `print` 代码**。
+
+---
+
 ## 🛠️ 本节任务
 
 1. **实现流式字符渲染方法**：实现 `_emit_text`，处理流式文本输出以及子代理输出缓冲。
