@@ -1,6 +1,10 @@
 import sys
 import asyncio
-from .agent import Agent, AgentConfig
+
+try:
+    from .agent import Agent, AgentConfig
+except ImportError:
+    from agent import Agent, AgentConfig
 
 
 async def main():

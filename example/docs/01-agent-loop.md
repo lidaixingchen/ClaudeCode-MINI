@@ -70,8 +70,12 @@ LLM API 是无状态的——每次调用不会记住上一次说了什么。要
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import cast
 import anthropic
+from anthropic.types import MessageParam, ToolUseBlockParam, TextBlockParam, ToolResultBlockParam
+from anthropic.types.tool_param import ToolParam
 from dotenv import load_dotenv
 from .tools import execute_tool, get_tool_definitions
 
@@ -82,7 +86,7 @@ load_dotenv()
 @dataclass
 class AgentConfig:
     """Agent 的静态配置，运行期间保持不变"""
-    model: str = "claude-sonnet-4-6"  # 默认使用的 LLM 模型
+    model: str = os.getenv("OPENAI_MODEL", "claude-sonnet-4-6")  # 默认使用的 LLM 模型
 
 
 @dataclass
@@ -92,11 +96,11 @@ class AgentState:
 
 
 class Agent:
-    def __init__(self, model: str = "claude-sonnet-4-6"):
-        self.config = AgentConfig(model=model)
+    def __init__(self, config: AgentConfig):
+        self.config = config
         self.state = AgentState()
         self._client = anthropic.AsyncAnthropic()  # 异步 Anthropic API 客户端
-        self._messages: list[dict] = []  # 消息历史：Agent 的工作记忆
+        self._messages: list[MessageParam] = []  # 消息历史：Agent 的工作记忆
 ```
 
 #### 配置 API 密钥
@@ -112,9 +116,19 @@ pip install python-dotenv
 然后在项目根目录创建 `.env` 文件：
 
 ```bash
-# .env
+# .env（Anthropic 官方 API）
 ANTHROPIC_API_KEY=sk-ant-api03-xxx  # 替换成你的真实密钥
 ```
+
+如果使用第三方兼容 API（如 DeepSeek），需要同时配置 `ANTHROPIC_BASE_URL`：
+
+```bash
+# .env（DeepSeek Anthropic 兼容接口）
+ANTHROPIC_API_KEY=sk-xxx           # 替换成你的真实密钥
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+```
+
+同时需要将 `AgentConfig` 中的默认模型改为 API 支持的模型名称（如 `deepseek-v4-flash`）。
 
 > ⚠️ **安全提示**：`.env` 文件包含敏感信息，务必将其加入 `.gitignore`，不要提交到版本控制。
 
@@ -178,7 +192,7 @@ Agent：用户问 → LLM 决定调用工具 → 执行工具 → 结果喂回 L
                 model=self.config.model,
                 max_tokens=4096,
                 system="You are a helpful coding assistant with access to tools.",
-                tools=get_tool_definitions(),  # 从 tools.py 导入
+                tools=cast(list[ToolParam], get_tool_definitions()),  # 从 tools.py 导入
                 messages=self._messages,
             )
 
@@ -204,6 +218,11 @@ Agent：用户问 → LLM 决定调用工具 → 执行工具 → 结果喂回 L
                 })
             # 工具结果用 role: "user" 推入——这是 Anthropic API 的协议要求
             self._messages.append({"role": "user", "content": tool_results})
+
+        # 输出最终回复
+        for block in response.content:
+            if block.type == "text":
+                print(block.text)
 
     @staticmethod
     def _block_to_dict(block) -> dict:
@@ -346,14 +365,14 @@ Agent 和工具就绪后，需要一个入口把它们串起来。
 
 import sys
 import asyncio
-from .agent import Agent
+from .agent import Agent, AgentConfig
 
 
 async def main():
     """程序入口：从命令行参数读取查询并启动 Agent"""
     # 读取命令行参数作为用户查询，默认为列出 .py 文件
     query = sys.argv[1] if len(sys.argv) > 1 else "列出当前目录下所有 .py 文件"
-    agent = Agent()
+    agent = Agent(config=AgentConfig())
     await agent._chat(query)  # 暂用 _chat，后续章节会扩展为完整的 chat 方法
 
 

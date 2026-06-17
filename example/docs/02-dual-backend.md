@@ -286,6 +286,10 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
                     "content": result,
                 })
             self.history.append_tool_results(tool_results)
+
+        # 输出最终回复
+        if message.content:
+            print(message.content)
 ```
 
 #### 注意什么
@@ -349,6 +353,11 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
             # Anthropic 协议：tool_result 用 role: "user" 包裹
             self.history.append_tool_results(tool_results)
 
+        # 输出最终回复
+        for block in response.content:
+            if block.type == "text":
+                print(block.text)
+
     @staticmethod
     def _block_to_dict(block) -> dict:
         """将 Anthropic SDK 对象转为普通 dict"""
@@ -386,7 +395,11 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
 import os
 import sys
 import asyncio
+from dotenv import load_dotenv
 from .agent import Agent
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
 
 
 async def main():

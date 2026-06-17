@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import cast
 import anthropic
 from anthropic.types import MessageParam, ToolUseBlockParam, TextBlockParam, ToolResultBlockParam
+from anthropic.types.tool_param import ToolParam
 from openai import OpenAI
-from .tools import execute_tool, get_tool_definitions
+try:
+    from .tools import execute_tool, get_tool_definitions
+except ImportError:
+    from tools import execute_tool, get_tool_definitions
 
 
 from dotenv import load_dotenv
@@ -14,7 +20,7 @@ load_dotenv()
 
 @dataclass
 class AgentConfig:
-    model: str = "gpt-4o"
+    model: str = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
     temperature: float = 0.7
     max_tokens: int = 1000
 
@@ -42,7 +48,7 @@ class Agent:
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 system="You are a helpful coding assistant with access to tools.",
-                tools=get_tool_definitions(),  # 从 tools.py 导入
+                tools=cast(list[ToolParam], get_tool_definitions()),  # 从 tools.py 导入
                 messages=self._messages,
             )
 
@@ -65,6 +71,11 @@ class Agent:
                 })
             # 工具结果用 role: "user" 推入——这是 Anthropic API 的协议要求
             self._messages.append({"role": "user", "content": tool_results})
+
+        # 输出最终回复
+        for block in response.content:
+            if block.type == "text":
+                print(block.text)
                     
     @staticmethod
     def _block_to_dict(block) -> TextBlockParam | ToolUseBlockParam:
