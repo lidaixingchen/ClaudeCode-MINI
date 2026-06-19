@@ -1,4 +1,4 @@
-# 第 03 课：核心工具链
+﻿# 第 03 课：核心工具链
 
 ## 🎯 本节目标
 
@@ -151,14 +151,14 @@ def _write_file(inp: dict) -> str:
 
 
 def _normalize_quotes(s: str) -> str:
-    “””将弯引号和特殊引号统一为直引号——LLM 常混淆这些字符”””
-    s = re.sub(“[‘’′]”, “’”, s)
-    s = re.sub(‘[“”″]’, ‘”’, s)
+    """将弯引号和特殊引号统一为直引号——LLM 常混淆这些字符"""
+    s = re.sub("[‘’′]", "'", s)
+    s = re.sub('[“”″]', '"', s)
     return s
 
 
 def _find_actual_string(file_content: str, search_string: str) -> str | None:
-    “””在文件中查找目标字符串，支持引号容错”””
+    """在文件中查找目标字符串，支持引号容错"""
     # 先尝试精确匹配——优先使用原始字符串
     if search_string in file_content:
         return search_string
@@ -173,43 +173,43 @@ def _find_actual_string(file_content: str, search_string: str) -> str | None:
 
 
 def _generate_diff(old_content: str, old_string: str, new_string: str) -> str:
-    “””生成轻量级 diff 输出，方便 Agent 确认修改内容”””
+    """生成轻量级 diff 输出，方便 Agent 确认修改内容"""
     # 根据 old_string 在前文中出现的 \n 计算起始行号
-    line_num = old_content.split(old_string)[0].count(“\n”) + 1
-    old_lines = old_string.split(“\n”)
-    new_lines = new_string.split(“\n”)
-    parts = [f”@@ -{line_num},{len(old_lines)} +{line_num},{len(new_lines)} @@”]
-    parts.extend(f”- {l}” for l in old_lines)
-    parts.extend(f”+ {l}” for l in new_lines)
-    return “\n”.join(parts)
+    line_num = old_content.split(old_string)[0].count("\n") + 1
+    old_lines = old_string.split("\n")
+    new_lines = new_string.split("\n")
+    parts = [f"@@ -{line_num},{len(old_lines)} +{line_num},{len(new_lines)} @@"]
+    parts.extend(f"- {l}" for l in old_lines)
+    parts.extend(f"+ {l}" for l in new_lines)
+    return "\n".join(parts)
 
 
 def _edit_file(inp: dict) -> str:
-    “””精确编辑：通过唯一匹配的 old_string 替换为 new_string”””
+    """精确编辑：通过唯一匹配的 old_string 替换为 new_string"""
     try:
-        path = Path(inp[“file_path”])
-        content = path.read_text(encoding=”utf-8”)
+        path = Path(inp["file_path"])
+        content = path.read_text(encoding="utf-8")
 
         # 带引号容错的查找
-        actual = _find_actual_string(content, inp[“old_string”])
+        actual = _find_actual_string(content, inp["old_string"])
         if not actual:
-            return f”Error: old_string not found in {inp[‘file_path’]}”
+            return f"Error: old_string not found in {inp['file_path']}"
 
         # 唯一性校验防止误替换——匹配多次时拒绝执行，由 LLM 调整 old_string 重试
         count = content.count(actual)
         if count > 1:
-            return f”Error: old_string found {count} times in {inp[‘file_path’]}. Must be unique.”
+            return f"Error: old_string found {count} times in {inp['file_path']}. Must be unique."
 
         # replace 第三个参数 1 表示只替换首个匹配——即使校验通过也做防御
-        new_content = content.replace(actual, inp[“new_string”], 1)
-        path.write_text(new_content, encoding=”utf-8”)
+        new_content = content.replace(actual, inp["new_string"], 1)
+        path.write_text(new_content, encoding="utf-8")
 
-        diff = _generate_diff(content, actual, inp[“new_string”])
+        diff = _generate_diff(content, actual, inp["new_string"])
         # 若实际匹配的字符串与请求不同，说明经历了引号标准化
-        note = “ (matched via quote normalization)” if actual != inp[“old_string”] else “”
-        return f”Successfully edited {inp[‘file_path’]}{note}\n\n{diff}”
+        note = " (matched via quote normalization)" if actual != inp["old_string"] else ""
+        return f"Successfully edited {inp['file_path']}{note}\n\n{diff}"
     except Exception as e:
-        return f”Error editing file: {e}”
+        return f"Error editing file: {e}"
 ```
 
 #### 注意什么
