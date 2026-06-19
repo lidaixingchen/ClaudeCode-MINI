@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .agent import Agent, BackendConfig
+from .tools import PermissionMode
 from .ui import print_welcome, print_user_prompt, print_error, print_info, print_plan_for_approval, print_plan_approval_options
 from .session import load_session, get_latest_session_id
 from .memory import list_memories
@@ -41,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _resolve_permission_mode(args: argparse.Namespace) -> str:
+def _resolve_permission_mode(args: argparse.Namespace) -> PermissionMode:
     if args.yolo:
         return "bypassPermissions"
     if args.plan:
@@ -206,7 +207,7 @@ Options:
   --accept-edits      Auto-approve file edits, still confirm dangerous shell
   --dont-ask          Auto-deny anything needing confirmation (for CI)
   --thinking          Enable extended thinking (Anthropic only)
-  --model, -m         Model to use (default: claude-opus-4-6, or MINI_CLAUDE_MODEL env)
+  --model, -m         Model to use (default: claude-opus-4-6, or MODEL_NAME env)
   --api-base URL      Use OpenAI-compatible API endpoint (key via env var)
   --resume            Resume the last session
   --max-cost USD      Stop when estimated cost exceeds this amount
@@ -234,7 +235,7 @@ Examples:
         sys.exit(0)
 
     permission_mode = _resolve_permission_mode(args)
-    model = args.model or os.environ.get("MINI_CLAUDE_MODEL", "claude-opus-4-6")
+    model = args.model or os.environ.get("MODEL_NAME", "claude-opus-4-6")
 
     try:
         backend = BackendConfig.from_env(model=model, api_base_override=args.api_base)

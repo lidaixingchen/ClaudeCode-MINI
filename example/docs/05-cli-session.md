@@ -286,6 +286,7 @@ import signal
 import asyncio
 import argparse
 from .agent import Agent
+from .tools import PermissionMode
 from .session import load_session, get_latest_session_id
 from .ui import print_welcome, print_user_prompt, print_error, print_info
 
@@ -323,7 +324,7 @@ def parse_args() -> argparse.Namespace:
 
 
 # 将命令行权限参数映射为 Agent 内部权限模式字符串
-def _resolve_permission_mode(args: argparse.Namespace) -> str:
+def _resolve_permission_mode(args: argparse.Namespace) -> PermissionMode:
     """将命令行权限参数映射为 Agent 内部权限模式字符串。"""
     if args.yolo:
         return "bypassPermissions"
@@ -350,7 +351,7 @@ Options:
   --accept-edits      Auto-approve file edits, still confirm dangerous shell
   --dont-ask          Auto-deny anything needing confirmation (for CI)
   --thinking          Enable extended thinking (Anthropic only)
-  --model, -m         Model to use (default: claude-opus-4-6, or MINI_CLAUDE_MODEL env)
+  --model, -m         Model to use (default: claude-opus-4-6, or MODEL_NAME env)
   --api-base URL      Use OpenAI-compatible API endpoint (key via env var)
   --resume            Resume the last session
   --max-cost USD      Stop when estimated cost exceeds this amount
@@ -379,7 +380,7 @@ Examples:
 
     permission_mode = _resolve_permission_mode(args)
     # 模型选择优先级：命令行参数 > 环境变量 > 默认值
-    model = args.model or os.environ.get("MINI_CLAUDE_MODEL", "claude-opus-4-6")
+    model = args.model or os.environ.get("MODEL_NAME", "claude-opus-4-6")
     api_base = args.api_base
 
     # ── API 密钥与端点解析 ────────────────────────────────────

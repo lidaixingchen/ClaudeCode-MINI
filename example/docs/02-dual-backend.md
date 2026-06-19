@@ -16,7 +16,7 @@
 # .env
 OPENAI_BASE_URL=http://localhost:11434/v1  # 或在线 API 接口
 OPENAI_API_KEY=ollama                      # 在线 API 请填写实际 Key
-MODEL=qwen2.5-coder                        # 模型名称
+MODEL_NAME=qwen2.5-coder                        # 模型名称
 ```
 
 然后运行：
@@ -266,7 +266,7 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
             response = await self._client.chat.completions.create(
                 model=self.backend.model,
                 messages=self.history.openai_messages,
-                tools=self._to_openai_tools(get_tool_definitions()),
+                tools=_to_openai_tools(get_tool_definitions()),
             )
             message = response.choices[0].message
 
@@ -429,7 +429,7 @@ async def main():
     """程序入口：读取环境变量，自动选择后端并启动 Agent"""
     query = sys.argv[1] if len(sys.argv) > 1 else "列出当前目录下所有 .py 文件"
 
-    model = os.environ.get("MODEL") or "claude-sonnet-4-6"
+    model = os.environ.get("MODEL_NAME") or "claude-sonnet-4-6"
     backend = BackendConfig.from_env(model=model)
     agent = Agent(backend=backend)
     await agent._chat(query)
@@ -537,9 +537,9 @@ def create_client(self):
 
 | 后端类型 | 必填变量 | 可选变量 | 典型场景 |
 | --- | --- | --- | --- |
-| Anthropic 官方 | `ANTHROPIC_API_KEY` | — | 直连 Claude API |
-| Anthropic 兼容 | `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` | — | OpenRouter、中转代理 |
-| OpenAI 兼容 | `OPENAI_API_KEY` + `OPENAI_BASE_URL` | `MODEL` | DeepSeek、Ollama、vLLM |
+| Anthropic 官方 | `ANTHROPIC_API_KEY` | `MODEL_NAME` | 直连 Claude API |
+| Anthropic 兼容 | `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` | `MODEL_NAME` | OpenRouter、中转代理 |
+| OpenAI 兼容 | `OPENAI_API_KEY` + `OPENAI_BASE_URL` | `MODEL_NAME` | DeepSeek、Ollama、vLLM |
 
 > 💡 当同时配置了 `OPENAI_API_KEY` + `OPENAI_BASE_URL` 和 `ANTHROPIC_API_KEY` 时，`BackendConfig.from_env()` 优先检测 OpenAI 组合（优先级 1），其次 Anthropic（优先级 2）。
 
@@ -597,23 +597,19 @@ response = await self._client.chat.completions.create(
 
 ### 输入
 
-在终端中设置 OpenAI 兼容后端（此处以使用本地 Ollama 运行的 `qwen2.5-coder` 模型为例）：
+在 `.env` 文件中配置 OpenAI 兼容后端（此处以使用本地 Ollama 运行的 `qwen2.5-coder` 模型为例）：
 
-**macOS / Linux**:
 ```bash
-cd python
-export OPENAI_BASE_URL="http://localhost:11434/v1"
-export OPENAI_API_KEY="ollama"
-export MODEL="qwen2.5-coder"
-python -m mini_claude "列出当前目录下所有 .py 文件"
+# .env
+OPENAI_BASE_URL=http://localhost:11434/v1
+OPENAI_API_KEY=ollama
+MODEL_NAME=qwen2.5-coder
 ```
 
-**Windows (PowerShell)**:
-```powershell
+然后运行：
+
+```bash
 cd python
-$env:OPENAI_BASE_URL="http://localhost:11434/v1"
-$env:OPENAI_API_KEY="ollama"
-$env:MODEL="qwen2.5-coder"
 python -m mini_claude "列出当前目录下所有 .py 文件"
 ```
 

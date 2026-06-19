@@ -369,7 +369,7 @@ async def _chat_openai(self, user_message: str) -> None:
         response = await self._openai_client.chat.completions.create(
             model=self.config.model,
             messages=self.history.openai_messages,  # 统一由 history 管理
-            tools=self._to_openai_tools(get_tool_definitions()),
+            tools=_to_openai_tools(get_tool_definitions()),
         )
         # ... 后续逻辑保持不变
 ```
