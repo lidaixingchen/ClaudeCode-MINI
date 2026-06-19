@@ -9,10 +9,7 @@ from anthropic.types.tool_param import ToolParam
 import openai
 import anthropic
 
-try:
-    from .tools import execute_tool, get_tool_definitions
-except ImportError:
-    from tools import execute_tool, get_tool_definitions
+from tools import execute_tool, get_tool_definitions
 
 
 from dotenv import load_dotenv

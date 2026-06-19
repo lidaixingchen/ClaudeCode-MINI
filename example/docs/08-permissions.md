@@ -1,4 +1,4 @@
-# 第 08 课：权限与安全限制
+﻿# 第 08 课：权限与安全限制
 
 ## 🎯 本节目标
 
@@ -314,7 +314,7 @@ def check_permission(
 ```python
 # agent.py 中的修改
 
-from .tools import check_permission  # 导入权限检查引擎
+from tools import check_permission  # 导入权限检查引擎
 
 
 class Agent:

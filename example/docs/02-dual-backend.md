@@ -1,4 +1,4 @@
-# 第 02 课：双后端架构
+﻿# 第 02 课：双后端架构
 
 ## 🎯 本节目标
 
@@ -89,7 +89,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 import anthropic
 import openai
-from .tools import execute_tool, get_tool_definitions
+from tools import execute_tool, get_tool_definitions
 
 
 @dataclass
@@ -429,7 +429,7 @@ import os
 import sys
 import asyncio
 from dotenv import load_dotenv
-from .agent import Agent, BackendConfig
+from agent import Agent, BackendConfig
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
@@ -474,7 +474,7 @@ import os
 import sys
 import asyncio
 from dotenv import load_dotenv
-from .agent import Agent, BackendConfig
+from agent import Agent, BackendConfig
 
 # 加载 .env 文件中的环境变量
 load_dotenv()

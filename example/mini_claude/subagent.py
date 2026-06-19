@@ -1,4 +1,4 @@
-"""Sub-agent system — fork-return pattern with built-in + custom agent types.
+﻿"""Sub-agent system — fork-return pattern with built-in + custom agent types.
 Mirrors Claude Code's AgentTool: explore (read-only), plan (structured), general (full tools),
 plus user-defined agents via .claude/agents/*.md."""
 
@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .frontmatter import parse_frontmatter
-from .tools import tool_definitions, ToolDef
+from frontmatter import parse_frontmatter
+from tools import tool_definitions, ToolDef
 
 # ─── Read-only tools (for explore and plan agents) ──────────
 

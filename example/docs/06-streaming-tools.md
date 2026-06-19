@@ -1,4 +1,4 @@
-# 第 06 课：流式工具执行
+﻿# 第 06 课：流式工具执行
 
 ## 🎯 本节目标
 
@@ -57,7 +57,7 @@ CONCURRENCY_SAFE_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch"}
 ```python
 # agent.py 中的导入修改
 
-from .tools import (
+from tools import (
     tool_definitions,
     execute_tool,
     CONCURRENCY_SAFE_TOOLS,  # 并发安全工具白名单，用于判断是否可以异步抢跑

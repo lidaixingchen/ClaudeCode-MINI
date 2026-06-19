@@ -1,4 +1,4 @@
-# 第 04 课：System Prompt 动态编译
+﻿# 第 04 课：System Prompt 动态编译
 
 ## 🎯 本节目标
 
@@ -29,8 +29,12 @@
 ## 📦 涉及文件
 
 修改：
-- `prompt.py`
+
 - `agent.py`
+
+创建：
+
+- `prompt.py`
 
 ---
 
@@ -306,10 +310,10 @@ def build_system_prompt() -> str:
 
   ```python
   # 源码 prompt.py 顶部的完整导入（本教程暂不需要）
-  from .memory import build_memory_prompt_section   # 第 10 课实现
-  from .skills import build_skill_descriptions       # 第 11 课实现
-  from .subagent import build_agent_descriptions     # 第 14 课实现
-  from .tools import get_deferred_tool_names         # 延迟加载工具名
+  from memory import build_memory_prompt_section   # 第 10 课实现
+  from skills import build_skill_descriptions       # 第 11 课实现
+  from subagent import build_agent_descriptions     # 第 14 课实现
+  from tools import get_deferred_tool_names         # 延迟加载工具名
   ```
 
   这些模块分别在第 10、11、14 课中逐步创建。在学习到对应章节时，再回来补齐 `prompt.py` 中的相应导入、占位符和调用即可。现阶段只需保证 6 个占位符能正确替换、`build_system_prompt()` 可被 `agent.py` 正常调用。
@@ -334,7 +338,7 @@ def build_system_prompt() -> str:
 # agent.py 中的修改
 
 # 1. 导入编译函数
-from .prompt import build_system_prompt
+from prompt import build_system_prompt
 
 # ... 
 

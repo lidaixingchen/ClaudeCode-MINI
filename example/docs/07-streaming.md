@@ -1,4 +1,4 @@
-# 第 07 课：文本流式输出与 API 重试
+﻿# 第 07 课：文本流式输出与 API 重试
 
 ## 🎯 本节目标
 
@@ -125,7 +125,7 @@ def _get_max_output_tokens(model: str) -> int:
 
 import json
 import sys
-from .ui import print_assistant_text, stop_spinner  # UI 库封装了 sys.stdout.write/flush
+from ui import print_assistant_text, stop_spinner  # UI 库封装了 sys.stdout.write/flush
 
 
 class Agent:
@@ -390,7 +390,7 @@ async def _call_openai_stream(self) -> dict:
 
 import asyncio
 import time
-from .ui import print_retry  # 导入重试渲染函数
+from ui import print_retry  # 导入重试渲染函数
 
 
 # 判断错误是否可重试（瞬时网络故障 vs 永久性配置错误）

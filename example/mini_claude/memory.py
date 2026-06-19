@@ -1,4 +1,4 @@
-"""Memory system — 4-type file-based memory with MEMORY.md index.
+﻿"""Memory system — 4-type file-based memory with MEMORY.md index.
 Mirrors Claude Code's memory architecture: semantic recall via sideQuery."""
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .frontmatter import parse_frontmatter, format_frontmatter
+from frontmatter import parse_frontmatter, format_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def format_memory_manifest(headers: list[MemoryHeader]) -> str:
     lines = []
     for h in headers:
         tag = f"[{h.type}] " if h.type else ""
-        ts = datetime.fromtimestamp(h.mtime_ms / 1000, tz=timezone.utc).isoformat()
+        ts = datetime.from timestamp(h.mtime_ms / 1000, tz=timezone.utc).isoformat()
         if h.description:
             lines.append(f"- {tag}{h.filename} ({ts}): {h.description}")
         else:

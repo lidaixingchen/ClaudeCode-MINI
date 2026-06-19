@@ -1,4 +1,4 @@
-# 第 05 课：CLI 与会话持久化
+﻿# 第 05 课：CLI 与会话持久化
 
 ## 🎯 本节目标
 
@@ -145,7 +145,7 @@ def get_latest_session_id() -> str | None:
 
 import uuid
 import time
-from .session import save_session  # 导入会话保存函数
+from session import save_session  # 导入会话保存函数
 
 
 class Agent:
@@ -285,10 +285,10 @@ import sys
 import signal
 import asyncio
 import argparse
-from .agent import Agent
-from .tools import PermissionMode
-from .session import load_session, get_latest_session_id
-from .ui import print_welcome, print_user_prompt, print_error, print_info
+from agent import Agent
+from tools import PermissionMode
+from session import load_session, get_latest_session_id
+from ui import print_welcome, print_user_prompt, print_error, print_info
 
 
 # 解析命令行参数，返回命名空间对象
@@ -551,7 +551,7 @@ async def run_repl(agent: Agent) -> None:
                 print_error(str(e))
             continue
         if inp == "/memory":
-            from .memory import list_memories
+            from memory import list_memories
             memories = list_memories()
             if not memories:
                 print_info("No memories saved yet.")
@@ -561,7 +561,7 @@ async def run_repl(agent: Agent) -> None:
                     print(f"    [{m.type}] {m.name} — {m.description}")
             continue
         if inp == "/skills":
-            from .skills import discover_skills
+            from skills import discover_skills
             skills = discover_skills()
             if not skills:
                 print_info("No skills found. Add skills to .claude/skills/<name>/SKILL.md")
@@ -574,7 +574,7 @@ async def run_repl(agent: Agent) -> None:
 
         # ── Skill 调用：/<skill-name> [args] ──
         if inp.startswith("/"):
-            from .skills import get_skill_by_name, resolve_skill_prompt, execute_skill
+            from skills import get_skill_by_name, resolve_skill_prompt, execute_skill
             # 解析 skill 名称和参数（以第一个空格分隔）
             space_idx = inp.find(" ")
             cmd_name = inp[1:space_idx] if space_idx > 0 else inp[1:]

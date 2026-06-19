@@ -1,4 +1,4 @@
-"""Skills system — discover, parse, and execute .claude/skills/*/SKILL.md
+﻿"""Skills system — discover, parse, and execute .claude/skills/*/SKILL.md
 Mirrors Claude Code's skill architecture: frontmatter metadata + prompt templates."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .frontmatter import parse_frontmatter
+from frontmatter import parse_frontmatter
 
 # ─── Types ──────────────────────────────────────────────────
 

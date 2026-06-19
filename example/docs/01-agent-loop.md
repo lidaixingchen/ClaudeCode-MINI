@@ -1,4 +1,4 @@
-# 第 01 课：最小 Agent Loop
+﻿# 第 01 课：最小 Agent Loop
 
 ## 🎯 本节目标
 
@@ -19,7 +19,6 @@ python -m mini_claude "列出当前目录下所有 .py 文件"
 
 ```
 🔧 list_files {"pattern": "*.py"}
-  mini_claude/__init__.py
   mini_claude/__main__.py
   mini_claude/agent.py
   mini_claude/tools.py
@@ -49,7 +48,6 @@ Agent 自动调用了 `list_files` 工具，拿到结果后组织语言回复你
 - `agent.py`
 - `tools.py`
 - `__main__.py`
-- `__init__.py`
 
 ---
 
@@ -79,7 +77,7 @@ import anthropic
 from anthropic.types import MessageParam, ToolUseBlockParam, TextBlockParam, ToolResultBlockParam
 from anthropic.types.tool_param import ToolParam
 from dotenv import load_dotenv
-from .tools import execute_tool, get_tool_definitions
+from tools import execute_tool, get_tool_definitions
 
 # 加载 .env 文件中的环境变量（如 ANTHROPIC_API_KEY）
 load_dotenv()
@@ -358,16 +356,14 @@ Agent 和工具就绪后，需要一个入口把它们串起来。
 
 #### 做什么
 
-首先，在 `python/mini_claude` 目录下新建一个空白的 `__init__.py` 文件（若未创建）使其被识别为 Python 包。
-
-然后在 `__main__.py` 中添加入口，支持从命令行参数读取查询：
+在 `__main__.py` 中添加入口，支持从命令行参数读取查询：
 
 ```python
 # __main__.py
 
 import sys
 import asyncio
-from .agent import Agent, AgentConfig
+from agent import Agent, AgentConfig
 
 
 async def main():

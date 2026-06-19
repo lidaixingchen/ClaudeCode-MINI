@@ -1,4 +1,4 @@
-"""Agent core loop — dual backend (Anthropic + OpenAI compatible), streaming,
+﻿"""Agent core loop — dual backend (Anthropic + OpenAI compatible), streaming,
 4-layer compression, plan mode, sub-agents, budget control.
 Mirrors Claude Code's agent architecture."""
 
@@ -17,7 +17,7 @@ from typing import Any, Callable, Awaitable, Literal
 import anthropic
 import openai
 
-from .tools import (
+from tools import (
     tool_definitions,
     execute_tool,
     check_permission,
@@ -26,12 +26,12 @@ from .tools import (
     ToolDef,
     PermissionMode,
 )
-from .memory import (
+from memory import (
     start_memory_prefetch,
     format_memories_for_injection,
     MemoryPrefetch,
 )
-from .ui import (
+from ui import (
     print_assistant_text,
     print_tool_call,
     print_tool_result,
@@ -46,10 +46,10 @@ from .ui import (
     start_spinner,
     stop_spinner,
 )
-from .session import save_session
-from .prompt import build_system_prompt
-from .subagent import get_sub_agent_config
-from .mcp_client import McpManager
+from session import save_session
+from prompt import build_system_prompt
+from subagent import get_sub_agent_config
+from mcp_client import McpManager
 
 # ─── Logger ─────────────────────────────────────────────────
 
@@ -927,7 +927,7 @@ class Agent:
     # ─── Skill fork mode ─────────────────────────────────────
 
     async def _execute_skill_tool(self, inp: dict) -> str:
-        from .skills import execute_skill
+        from skills import execute_skill
         result = execute_skill(inp.get("skill_name", ""), inp.get("args", ""))
         if not result:
             return f"Unknown skill: {inp.get('skill_name', '')}"

@@ -1,4 +1,4 @@
-# 第 11 课：技能系统与 AI 脚本
+﻿# 第 11 课：技能系统与 AI 脚本
 
 ## 🎯 本节目标
 
@@ -64,7 +64,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from .frontmatter import parse_frontmatter
+from frontmatter import parse_frontmatter
 
 
 @dataclass
@@ -244,7 +244,7 @@ def execute_skill(
             cmd_args = inp[space_idx + 1:] if space_idx > 0 else ""
 
             # 判断是否是已注册的技能
-            from .skills import discover_skills, resolve_skill_prompt
+            from skills import discover_skills, resolve_skill_prompt
             skills = discover_skills()
             skill = next((s for s in skills if s.name == cmd_name), None)
 
@@ -310,7 +310,7 @@ tool_definitions: list[dict] = [
 async def _execute_tool_call(self, name: str, inp: dict) -> str:
     # ... 挂载对 skill 工具的调用分发
     if name == "skill":
-        from .skills import execute_skill
+        from skills import execute_skill
         skill_name = inp.get("skill_name", "")
         args = inp.get("args", "")
 
@@ -336,7 +336,7 @@ async def _execute_tool_call(self, name: str, inp: dict) -> str:
 
 def build_skill_descriptions() -> str:
     """构建技能描述段落，注入到 System Prompt 中供模型识别可用技能。"""
-    from .skills import discover_skills
+    from skills import discover_skills
     skills = discover_skills()
     if not skills:
         return ""

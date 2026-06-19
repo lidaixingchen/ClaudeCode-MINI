@@ -1,4 +1,4 @@
-# 第 10 课：项目级记忆系统
+﻿# 第 10 课：项目级记忆系统
 
 ## 🎯 本节目标
 
@@ -180,7 +180,7 @@ def format_frontmatter(meta: dict[str, str], body: str) -> str:
 ```python
 # memory.py（续）
 
-from .frontmatter import parse_frontmatter, format_frontmatter
+from frontmatter import parse_frontmatter, format_frontmatter
 ```
 
 #### 注意什么
@@ -705,7 +705,7 @@ When the user asks you to remember or recall, or when prior context seems releva
 # prompt.py 中的修改
 
 # 1. 引入记忆编译函数
-from .memory import build_memory_prompt_section
+from memory import build_memory_prompt_section
 
 # ...
 

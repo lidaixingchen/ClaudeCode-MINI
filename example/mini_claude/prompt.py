@@ -1,4 +1,4 @@
-"""System prompt construction — template embedded, variable interpolation, context gathering."""
+﻿"""System prompt construction — template embedded, variable interpolation, context gathering."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .memory import build_memory_prompt_section
-from .skills import build_skill_descriptions
-from .subagent import build_agent_descriptions
-from .tools import get_deferred_tool_names
+from memory import build_memory_prompt_section
+from skills import build_skill_descriptions
+from subagent import build_agent_descriptions
+from tools import get_deferred_tool_names
 
 # ─── System prompt template (embedded) ──────────────────────
 
@@ -144,7 +144,7 @@ def _resolve_includes(
 
 
 def _load_rules_dir(directory: Path) -> str:
-    """Load all .md files from .claude/rules/ directory."""
+    """Load all .md files from claude/rules/ directory."""
     rules_dir = directory / ".claude" / "rules"
     if not rules_dir.is_dir():
         return ""

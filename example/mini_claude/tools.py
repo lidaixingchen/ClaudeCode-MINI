@@ -1,4 +1,4 @@
-"""Tool definitions and execution — 10 tools with 5 permission modes.
+﻿"""Tool definitions and execution — 10 tools with 5 permission modes.
 Mirrors Claude Code's tool system: read_file, write_file, edit_file, list_files,
 grep_search, run_shell, skill, enter/exit_plan_mode, agent."""
 
@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from .memory import get_memory_dir
-from .frontmatter import parse_frontmatter
+from memory import get_memory_dir
+from frontmatter import parse_frontmatter
 
 # ─── Logger ─────────────────────────────────────────────────
 
@@ -122,7 +122,7 @@ tool_definitions: list[ToolDef] = [
     },
     {
         "name": "skill",
-        "description": "Invoke a registered skill by name. Skills are prompt templates loaded from .claude/skills/. Returns the skill's resolved prompt to follow.",
+        "description": "Invoke a registered skill by name. Skills are prompt templates loaded from claude/skills/. Returns the skill's resolved prompt to follow.",
         "input_schema": {
             "type": "object",
             "properties": {

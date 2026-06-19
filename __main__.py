@@ -3,10 +3,7 @@ import sys
 import asyncio
 from dotenv import load_dotenv
 
-try:
-    from .agent import Agent, BackendConfig
-except ImportError:
-    from agent import Agent, BackendConfig
+from agent import Agent, BackendConfig
 
 # 加载环境变量
 load_dotenv()
