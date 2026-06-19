@@ -189,6 +189,12 @@ class MessageHistory:
         else:
             self.messages.append({"role": "user", "content": results})
 
+    def update_system_prompt(self, prompt: str) -> None:
+        """更新系统提示词（第 04 课动态编译时使用）"""
+        self.system_prompt = prompt
+        if self.use_openai and self._openai_messages:
+            self._openai_messages[0]["content"] = prompt
+
 
 class Agent:
     def __init__(self, backend: BackendConfig):

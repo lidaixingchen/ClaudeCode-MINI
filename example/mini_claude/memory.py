@@ -188,7 +188,7 @@ def format_memory_manifest(headers: list[MemoryHeader]) -> str:
     lines = []
     for h in headers:
         tag = f"[{h.type}] " if h.type else ""
-        ts = datetime.from timestamp(h.mtime_ms / 1000, tz=timezone.utc).isoformat()
+        ts = datetime.fromtimestamp(h.mtime_ms / 1000, tz=timezone.utc).isoformat()
         if h.description:
             lines.append(f"- {tag}{h.filename} ({ts}): {h.description}")
         else:

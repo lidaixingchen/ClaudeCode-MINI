@@ -169,6 +169,11 @@ def build_agent_descriptions() -> str:
     return "\n".join(lines)
 ```
 
+> ⚠️ **别忘了回到 `prompt.py` 接线！** 你需要做两件事：
+>
+> 1. 文件顶部添加 `from subagent import build_agent_descriptions`
+> 2. 在 `build_system_prompt()` 函数中调用它，将返回值替换 `{{agents}}` 占位符
+
 #### 注意什么
 
 - **`get_available_agent_types` 的作用**：它将内置的三种代理类型与通过 `_discover_custom_agents()` 扫描到的用户自定义代理合并为统一列表，供外部查询。这使得 `agent` 工具的描述中可以动态展示当前可用的代理类型。

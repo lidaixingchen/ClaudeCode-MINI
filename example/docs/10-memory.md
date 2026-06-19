@@ -701,6 +701,11 @@ When the user asks you to remember or recall, or when prior context seems releva
 
 在 `prompt.py` 中更新引入和替换：
 
+> ⚠️ **别忘了回到 `prompt.py` 接线！** 你需要做两件事：
+>
+> 1. 文件顶部添加 `from memory import build_memory_prompt_section`
+> 2. 在 `build_system_prompt()` 函数中调用它，将返回值替换 `{{memory}}` 占位符
+
 ```python
 # prompt.py 中的修改
 

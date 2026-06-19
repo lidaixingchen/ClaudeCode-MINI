@@ -10,7 +10,7 @@ import openai
 import anthropic
 
 from tools import execute_tool, get_tool_definitions
-
+from prompt import build_system_prompt
 
 from dotenv import load_dotenv
 
@@ -104,6 +104,12 @@ class MessageHistory:
         else:
             self.messages.append({"role": "assistant", "content": content})
 
+    def update_system_prompt(self, system_prompt: str) -> None:
+        """更新系统提示词"""
+        self.system_prompt = system_prompt
+        if self.use_openai and self._openai_messages:
+            self._openai_messages[0]["content"] = system_prompt
+
     def append_tool_results(self, results: list[dict]) -> None:
         """添加工具执行结果。两种协议的消息格式不同"""
         if self.use_openai:
@@ -160,11 +166,13 @@ class Agent:
         self.history.append_user_message(user_message)
 
         while True:
+            # 动态编译最新的系统提示词
+            current_system_prompt = build_system_prompt()
             # 2. 调用 LLM 获取响应
             response = await self._client.messages.create(
                 model=self.backend.model,
                 max_tokens=4096,
-                system="You are a helpful coding assistant with access to tools.",
+                system=current_system_prompt,
                 tools=get_tool_definitions(),
                 messages=self.history.anthropic_messages,
             )
@@ -218,6 +226,9 @@ class Agent:
         self.history.append_user_message(user_message)
 
         while True:
+            # 动态编译最新的系统提示词
+            current_system_prompt = build_system_prompt()
+            self.history.update_system_prompt(current_system_prompt)
             # 2. 调用 OpenAI 兼容 API
             response = await self._client.chat.completions.create(
                 model=self.backend.model,

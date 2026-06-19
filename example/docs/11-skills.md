@@ -368,6 +368,11 @@ def build_skill_descriptions() -> str:
 
 并确保该函数返回值在 `build_system_prompt()` 中替换了 `{{skills}}` 占位符。
 
+> ⚠️ **别忘了回到 `prompt.py` 接线！** 你需要做两件事：
+>
+> 1. 文件顶部添加 `from skills import build_skill_descriptions`
+> 2. 在 `build_system_prompt()` 函数中调用它，将返回值替换 `{{skills}}` 占位符
+
 #### 注意什么
 
 - **用户可调用 vs 仅自动调用**：`build_skill_descriptions` 将技能分为两组呈现给大模型——`invocable`（用户可通过 `/name` 手动调用）和 `auto_only`（仅由模型在需要时通过 `skill` 工具自主调用）。这种区分让模型在 System Prompt 中就能清晰辨别哪些技能可以被用户直接触发、哪些只能由它自己主动发起。
