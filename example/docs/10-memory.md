@@ -849,13 +849,13 @@ for f in d.glob("*.md"):
 
 1. 启动 Agent，向其告知一条你的角色和习惯偏好：
    ```bash
-   python -m mini_claude "记住：我叫小明，负责前端 React 重构工作"
+   python __main__.py "记住：我叫小明，负责前端 React 重构工作"
    ```
 2. **观察工具调用**：大模型在返回时，应当自主产生了一次 `write_file` 的调用，在你的后台写入了一个以 `user_` 或 `project_` 开头的记忆 md 文件。
 3. **验证持久化**：退出程序。
 4. 在另一目录或者直接在当前目录下重新启动 Agent：
    ```bash
-   python -m mini_claude "你是谁？当前项目负责人是谁？"
+   python __main__.py "你是谁？当前项目负责人是谁？"
    ```
 
 ### 预期结果

@@ -26,8 +26,7 @@ MODEL_NAME=qwen2.5-coder                        # 模型名称
 然后运行：
 
 ```bash
-cd python
-python -m mini_claude
+python __main__.py
 ```
 
 你将看到多轮对话效果：
@@ -694,8 +693,7 @@ MODEL_NAME=qwen2.5-coder
 然后运行：
 
 ```bash
-cd python
-python -m mini_claude
+python __main__.py
 ```
 
 ### 预期结果

@@ -427,7 +427,7 @@ prompt = prompt.replace("$ARGUMENTS", args)
    ```
 2. 启动 Agent，验证手动触发：
    ```bash
-   python -m mini_claude
+   python __main__.py
    ```
 3. 在终端中键入：`/commit 修复拼写错误` 并按下回车。
 4. **观察输出**：验证 Agent 是否输出了 `ℹ Invoking skill: commit` 并开始读取 git 状态。

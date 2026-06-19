@@ -423,7 +423,7 @@ if block["name"] in ("run_shell", "edit_file"):
 
 1. 启动 Agent，输入一个会触发只读工具链式调用的请求：
    ```bash
-   python -m mini_claude "读取 prompt.py 的前 10 行"
+   python __main__.py "读取 prompt.py 的前 10 行"
    ```
 2. **观察体感**：注意观察大模型输出“正在思考”或输出字符时，在它停止吐字的瞬间，终端是否**几乎没有任何等待**，就立刻展现了 `📖 read_file` 工具的输出结果。
 

@@ -438,7 +438,7 @@ if perm["action"] == "deny":
    ```
 2. 启动 Agent，要求其测试 push：
    ```bash
-   python -m mini_claude "将代码强推上库"
+   python __main__.py "将代码强推上库"
    ```
 3. 验证安全模式拦截：
    - 观察终端是否出现 `✗ Action Denied: Denied by permission rule for run_shell` 的拦截字样，且没有发生程序报错退出。

@@ -1,4 +1,4 @@
-# 第 09 课：上下文分级压缩
+﻿# 第 09 课：上下文分级压缩
 
 ## 🎯 本节目标
 
@@ -610,7 +610,7 @@ response = await client.messages.create(...)
 
 1. 启动 Agent REPL：
    ```bash
-   python -m mini_claude
+   python __main__.py
    ```
 2. 进行 2-3 轮常规问答。
 3. 输入手动压缩命令 `/compact`。

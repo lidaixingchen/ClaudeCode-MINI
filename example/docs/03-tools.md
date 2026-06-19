@@ -12,7 +12,7 @@
 
 **运行测试**：
 ```bash
-python -m mini_claude "把 tools.py 中的 MAX_RESULT_CHARS 修改为 60000"
+python __main__.py "把 tools.py 中的 MAX_RESULT_CHARS 修改为 60000"
 ```
 
 你将看到 Agent 能够自主进行链式操作：
@@ -474,7 +474,7 @@ goodbye world
 
 然后通过 Agent 将中间的直引号编辑为弯引号（如果能实现，说明编辑及引号容错工作完全正常）：
 ```bash
-python -m mini_claude "把 test_edit.txt 文件中的直引号 '\"msg\" = \"hello\"' 替换为 '“msg” = “hello”'"
+python __main__.py "把 test_edit.txt 文件中的直引号 '\"msg\" = \"hello\"' 替换为 '“msg” = “hello”'"
 ```
 
 ### 预期结果

@@ -11,7 +11,7 @@
 完成本节后，用户可以直接启动 Agent 进入交互式终端（REPL）：
 
 ```bash
-python -m mini_claude
+python __main__.py
 ```
 
 你将看到精美的欢迎信息与命令行提示符：
@@ -27,7 +27,7 @@ python -m mini_claude
 **功能测试**：
 1. **指令测试**：输入 `/clear` 可以清空对话历史。
 2. **中断测试**：当 Agent 正在思考或执行工具时，按下 `Ctrl+C` 将会中断本次执行并返回 `> ` 提示符，而不会导致整个程序退出。在空闲状态下，双击 `Ctrl+C` 会退出程序。
-3. **会话恢复测试**：输入几句对话后输入 `exit` 退出，再次运行 `python -m mini_claude --resume`，Agent 将完美读取历史会话。
+3. **会话恢复测试**：输入几句对话后输入 `exit` 退出，再次运行 `python __main__.py --resume`，Agent 将完美读取历史会话。
 
 ---
 
@@ -659,14 +659,14 @@ async def run_repl(agent: Agent) -> None:
 
 1. 直接运行启动 REPL：
    ```bash
-   python -m mini_claude
+   python __main__.py
    ```
 2. 输入 `hello` 并按下回车，等待 Agent 回复。
 3. 输入命令 `/clear`，验证历史是否清空。
 4. 输入 `exit` 退出。
 5. 运行恢复会话命令：
    ```bash
-   python -m mini_claude --resume
+   python __main__.py --resume
    ```
 
 ### 预期结果

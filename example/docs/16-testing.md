@@ -1,4 +1,4 @@
-# 第 16 课：测试与调试
+﻿# 第 16 课：测试与调试
 
 ## 🎯 本节目标
 
@@ -6,7 +6,7 @@
 
 ```mermaid
 graph LR
-    Setup["bash test/setup.sh"] --> Run["运行 python -m mini_claude --yolo"]
+    Setup["bash test/setup.sh"] --> Run["运行 python __main__.py --yolo"]
     Run --> Test["执行 19 项端到端测试"]
     Test --> Cleanup["bash test/cleanup.sh"]
 
@@ -20,7 +20,7 @@ graph LR
 
 学员无需修改代码，只需通过以下测试流程：
 1. **环境一键配置**：执行 `bash test/setup.sh`，系统将自动在当前目录下配置好测试所需的 MCP 节点配置、自定义技能、系统规则、测试大文本、以及弯引号转义文件。
-2. **全流程手动跑通**：通过启动本地 `python -m mini_claude --yolo`（全自动授权模式）或交互式 REPL 模式，逐一跑通 19 项核心用例。
+2. **全流程手动跑通**：通过启动本地 `python __main__.py --yolo`（全自动授权模式）或交互式 REPL 模式，逐一跑通 19 项核心用例。
 3. **快速对照表验收**：在完成测试后，在末尾的『快速对照表』中，确认 PY（Python）版的所有功能测试点均已完成打勾通过。
 
 ---
@@ -70,7 +70,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1
 
 3. 启动 Python 版的交互式 REPL 测试控制台（使用 `--yolo` 跳过权限校验）：
 ```bash
-python -m mini_claude --yolo
+python __main__.py --yolo
 ```
 
 #### 注意什么
@@ -124,7 +124,7 @@ Save these memories for me:
 3. type=reference, name="staging server", description="Staging environment URL", content="Staging server: https://staging.example.com, credentials in 1Password."
 ```
 *(预期：Agent 自动将这三条记忆以 YAML Frontmatter 格式保存到本地磁盘)*
-* **第二步：键入 `exit` 退出**，重新启动会话：`python -m mini_claude --yolo`。输入触发查询：
+* **第二步：键入 `exit` 退出**，重新启动会话：`python __main__.py --yolo`。输入触发查询：
 ```
 Read the file python/mini_claude/session.py, then tell me: where can I deploy to test my changes?
 ```
@@ -237,13 +237,13 @@ Use edit_file on test/quote-test.js. In the old_string, use curly double quotes 
 #### 做什么
 1. **测试 14：Session Resume (跨会话恢复)**
 * **首次会话**：
-运行 `python -m mini_claude --yolo`。在 REPL 中输入：
+运行 `python __main__.py --yolo`。在 REPL 中输入：
 ```
 Remember this: The secret code is BANANA-42. Read test/quote-test.js.
 ```
 然后输入 `exit` 退出。
 * **二次恢复**：
-运行 `python -m mini_claude --yolo --resume` 启动。
+运行 `python __main__.py --yolo --resume` 启动。
 输入查询：
 ```
 What was the secret code I told you earlier?
@@ -253,14 +253,14 @@ What was the secret code I told you earlier?
 2. **测试 15：One-shot 命令自退出**
 在系统终端中直接传入命令行提问：
 ```bash
-python -m mini_claude --yolo "Read test/quote-test.js and tell me its contents. Only output the raw text."
+python __main__.py --yolo "Read test/quote-test.js and tell me its contents. Only output the raw text."
 ```
 ✅ **预期输出**：控制台打印工具调用并读出文件，在打印完 `"Hello World"` 后，程序**自动结束并退出**，将控制权还给操作系统的 Shell 终端。
 
 3. **测试 16：预算限制 (--max-turns)**
 在终端中设置极低的回合限制（2回合）：
 ```bash
-python -m mini_claude --yolo --max-turns 2 "Read these files one by one: test/quote-test.js, test/large-file.txt. Tell me the line count of each."
+python __main__.py --yolo --max-turns 2 "Read these files one by one: test/quote-test.js, test/large-file.txt. Tell me the line count of each."
 ```
 ✅ **预期输出**：模型在读取完第一个文件后，还没来得及读取第二个，系统直接进行 Turn 校验拦截，打印 `[INFO] Budget exceeded: Turn limit reached (2 >= 2)` 并退出。
 
@@ -376,7 +376,7 @@ bash test/cleanup.sh
 | 12 | **Plan Mode** | 进入 `/plan` -> 规划 -> exit -> 选择 1 | ☐ | 拦截非 plan 文件的写入，选择 1 后清空会话上下文 |
 | 13 | **引号规范化** | 故意用弯引号发送 edit_file 替换请求 | ☐ | 匹配自动纠正并成功替换，显示 matched via normalization |
 | 14 | **Session Resume** | 提问 -> exit -> 启动带 `--resume` 追问 | ☐ | 正确恢复上一次会话历史并回答出 secret code |
-| 15 | **One-shot 模式** | `python -m mini_claude "Read test/quote-test.js"` | ☐ | 工具读取文件，大模型输出项目名称后**直接自动退出** |
+| 15 | **One-shot 模式** | `python __main__.py "Read test/quote-test.js"` | ☐ | 工具读取文件，大模型输出项目名称后**直接自动退出** |
 | 16 | **预算控制** | 启动带 `--max-turns 2` 读取多个文件 | ☐ | 执行 2 个 turn 后控制台抛出超限并干净熔断 |
 | 17 | **Grep Search** | 用 grep 搜索 python 目录下的 py 文件 | ☐ | 正确过滤无关文件，返回包含匹配行号的检索列表 |
 | 18 | **Write File** | 写入 `test/tmp/nested/hello.txt` | ☐ | 递归创建嵌套的 `nested/` 目录，成功写入 |

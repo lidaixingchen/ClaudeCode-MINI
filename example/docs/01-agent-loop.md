@@ -11,8 +11,7 @@
 完成本节后，运行以下命令：
 
 ```bash
-cd python
-python -m mini_claude "列出当前目录下所有 .py 文件"
+python __main__.py "列出当前目录下所有 .py 文件"
 ```
 
 你会看到终端输出类似：
@@ -501,11 +500,10 @@ if not tool_uses:
 确保已在项目根目录的 `.env` 文件中配置了 `ANTHROPIC_API_KEY`（参见步骤 1），然后运行：
 
 ```bash
-cd python
-python -m mini_claude "列出当前目录下所有 .py 文件"
+python __main__.py "列出当前目录下所有 .py 文件"
 ```
 
-> 💡 如果不想使用 `.env` 文件，也可以通过环境变量临时设置：`ANTHROPIC_API_KEY=sk-ant-xxx python -m mini_claude "..."`
+> 💡 如果不想使用 `.env` 文件，也可以通过环境变量临时设置：`ANTHROPIC_API_KEY=sk-ant-xxx python __main__.py "..."`
 
 ### 预期结果
 

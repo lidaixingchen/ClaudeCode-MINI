@@ -435,7 +435,7 @@ def _resolve_includes(content, base_path):
    ```
 2. 运行 Agent 并发送任意消息：
    ```bash
-   python -m mini_claude "你好"
+   python __main__.py "你好"
    ```
 
 ### 预期结果
