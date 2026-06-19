@@ -13,12 +13,24 @@ load_dotenv()
 
 async def main():
     """程序入口：读取环境变量，自动选择后端并启动 Agent"""
-    query = sys.argv[1] if len(sys.argv) > 1 else "列出当前目录下所有 .py 文件"
-
     model = os.environ.get("MODEL_NAME") or "claude-sonnet-4-6"
     backend = BackendConfig.from_env(model=model)
     agent = Agent(backend=backend)
-    await agent._chat(query)
+
+    print("Mini Claude Code 已启动！输入 'exit' 退出。\n")
+
+    while True:
+        try:
+            user_input = input("> ")
+            if user_input.strip().lower() in ("exit", "quit"):
+                print("再见！")
+                break
+            if not user_input.strip():
+                continue
+            await agent._chat(user_input)
+        except KeyboardInterrupt:
+            print("\n再见！")
+            break
 
 
 if __name__ == "__main__":

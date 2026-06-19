@@ -2,13 +2,17 @@
 
 ## 🎯 本节目标
 
-实现 Agent 的双后端支持。允许 Agent 既可以使用 Anthropic API，也可以使用 OpenAI 兼容的 API（如 DeepSeek、Ollama 本地模型或 GPT-4 等），且两者共享相同的工具定义和执行流程。
+实现 Agent 的双后端支持，并引入多轮对话模式。允许 Agent 既可以使用 Anthropic API，也可以使用 OpenAI 兼容的 API（如 DeepSeek、Ollama 本地模型或 GPT-4 等），且两者共享相同的工具定义和执行流程。最后通过一个简单的交互循环，让 Agent 支持连续对话。
 
 ---
 
 ## 🏆 最终效果
 
-完成本节后，用户可以通过修改 `.env` 文件，在不修改代码的情况下，无缝在 Anthropic 和 OpenAI 兼容的后端之间进行切换。
+完成本节后，你将实现两个核心能力：
+
+**1. 双后端切换**：通过修改 `.env` 文件，无缝在 Anthropic 和 OpenAI 兼容的后端之间切换。
+
+**2. 多轮对话**：Agent 支持连续对话，无需每次重启程序。
 
 在 `.env` 文件中配置 OpenAI 兼容后端（以使用本地 Ollama 运行的 `qwen2.5-coder` 或在线的 DeepSeek API 为例）：
 
@@ -23,19 +27,24 @@ MODEL_NAME=qwen2.5-coder                        # 模型名称
 
 ```bash
 cd python
-python -m mini_claude "列出当前目录下所有 .py 文件"
+python -m mini_claude
 ```
 
-运行后你将看到与第一课相同的工具调用流程，但整个对话和决策都是由 OpenAI 兼容接口的模型驱动的：
+你将看到多轮对话效果：
 
-```
-🔧 list_files {"pattern": "*.py"}
-  mini_claude/__init__.py
-  mini_claude/__main__.py
-  mini_claude/agent.py
-  mini_claude/tools.py
+```text
+Mini Claude Code 已启动！输入 'exit' 退出。
 
-当前目录下有以下 .py 文件：...
+> 列出当前目录下的文件
+🔧 list_files {"pattern": "**/*"}
+...
+
+> 把 README.md 读出来
+🔧 read_file {"path": "README.md"}
+...
+
+> exit
+再见！
 ```
 
 ---
@@ -47,6 +56,7 @@ python -m mini_claude "列出当前目录下所有 .py 文件"
 3. **实现 OpenAI 专属的聊天循环 `_chat_openai`**：独立处理 OpenAI 消息列表格式及 `tool_calls` / `tool` 结果的推入。
 4. **重构 `_chat` 入口**：根据客户端配置，自动分发到 `_chat_anthropic`（原 `_chat`）或新实现的 `_chat_openai`。
 5. **更新 `__main__.py` 入口**：读取环境变量以支持外部参数传递。
+6. **实现多轮对话**：在 `__main__.py` 中添加交互循环，让 Agent 支持连续对话。
 
 ---
 
@@ -447,6 +457,75 @@ if __name__ == "__main__":
 
 ---
 
+### 步骤 6：实现多轮对话
+
+#### 为什么做
+
+到目前为止，我们的 Agent 只能处理单次指令——运行一次就退出。多轮对话的核心逻辑非常简单，只需在 `__main__.py` 中添加一个交互循环。
+
+#### 做什么
+
+修改 `__main__.py`，将单次调用改为交互循环：
+
+```python
+# __main__.py
+
+import os
+import sys
+import asyncio
+from dotenv import load_dotenv
+from .agent import Agent, BackendConfig
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
+
+
+async def main():
+    """程序入口：多轮对话模式"""
+    model = os.environ.get("MODEL_NAME") or "claude-sonnet-4-6"
+    backend = BackendConfig.from_env(model=model)
+    agent = Agent(backend=backend)
+
+    print("Mini Claude Code 已启动！输入 'exit' 退出。\n")
+
+    while True:
+        try:
+            user_input = input("> ")
+            if user_input.strip().lower() in ("exit", "quit"):
+                print("再见！")
+                break
+            if not user_input.strip():
+                continue
+            await agent._chat(user_input)
+        except KeyboardInterrupt:
+            print("\n再见！")
+            break
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### 核心逻辑
+
+多轮对话的核心只需一个 `while` 循环：
+
+```python
+while True:
+    user_input = input("> ")
+    if user_input.lower() in ("exit", "quit"):
+        break
+    await agent._chat(user_input)
+```
+
+#### 为什么这么简单？
+
+- Agent 的核心循环 `_chat()` 已经处理了消息历史、工具调用等复杂逻辑
+- 多轮对话只需要在外层加一个输入循环，把用户输入喂给 `_chat()` 即可
+- 完整的 CLI 美化（欢迎横幅、命令支持、Ctrl+C 优雅中断）将在第 05 课实现
+
+---
+
 ## 消息历史抽象层
 
 为了避免 Anthropic/OpenAI 双后端的代码重复，我们引入了 `MessageHistory` 类：
@@ -610,12 +689,27 @@ MODEL_NAME=qwen2.5-coder
 
 ```bash
 cd python
-python -m mini_claude "列出当前目录下所有 .py 文件"
+python -m mini_claude
 ```
 
 ### 预期结果
 
-程序使用指定的本地模型启动，成功调用 `list_files` 工具，读取文件列表并最终以中文回复文件列表，过程与使用 Claude 效果相同。
+程序使用指定的本地模型启动，进入多轮对话模式：
+
+```text
+Mini Claude Code 已启动！输入 'exit' 退出。
+
+> 列出当前目录下的文件
+🔧 list_files {"pattern": "**/*"}
+...
+
+> 把 README.md 读出来
+🔧 read_file {"path": "README.md"}
+...
+
+> exit
+再见！
+```
 
 ### 失败时如何排查
 
@@ -639,9 +733,10 @@ python -m mini_claude "列出当前目录下所有 .py 文件"
 
 ## 📦 本节收获
 
-1. **双后端架构的设计**：理解了如何通过抽象公共方法，同时支持 Anthropic 与 OpenAI 兼容协议。
+1. **双后端架构的设计**：理解了如何通过 `BackendConfig` 工厂模式和 `MessageHistory` 抽象层，同时支持 Anthropic 与 OpenAI 兼容协议。
 2. **多协议适配的差异性**：掌握了 OpenAI 中 System Prompt、`tool_calls` 与 `role: "tool"` 的协议特殊要求。
 3. **环境适应力**：使 Agent 摆脱单一闭源 API 的限制，具备了接入任意本地模型（Ollama/vLLM）或更具性价比的模型（如 DeepSeek/Qwen）的能力。
+4. **多轮对话的实现**：理解了 Agent 的核心循环 `_chat()` 已处理消息历史和工具调用，多轮对话只需在外层加一个输入循环。
 
 ---
 

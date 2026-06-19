@@ -17,7 +17,9 @@
 
 ## ⚠️ 前置准备：移除临时输出代码
 
-从第 1 课到第 6 课，我们一直在 `_chat_anthropic` 和 `_chat_openai` 循环末尾使用以下临时代码输出回复：
+从第 1 课到第 6 课，我们一直在 `_chat_anthropic` 和 `_chat_openai` 循环末尾使用临时代码输出回复。本课实现流式输出后，文本会在 API 响应过程中逐字实时打印，循环结束后不再需要额外输出。请在开始本课前，**删除两处临时输出代码**：
+
+**1. 删除 `_chat_anthropic` 末尾的 Anthropic 风格输出：**
 
 ```python
 # 临时方案——本课将移除
@@ -26,7 +28,13 @@ for block in response.content:
         print(block.text)
 ```
 
-本课实现流式输出后，文本会在 API 响应过程中逐字实时打印，循环结束后不再需要额外输出。请在开始本课前，**删除 `_chat_anthropic` 和 `_chat_openai` 循环末尾的这段 `print` 代码**。
+**2. 删除 `_chat_openai` 末尾的 OpenAI 风格输出：**
+
+```python
+# 临时方案——本课将移除
+if message.content:
+    print(message.content)
+```
 
 ---
 
