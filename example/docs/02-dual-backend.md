@@ -8,25 +8,21 @@
 
 ## 🏆 最终效果
 
-完成本节后，用户可以通过设置环境变量，在不修改代码的情况下，无缝在 Anthropic 和 OpenAI 兼容的后端之间进行切换。
+完成本节后，用户可以通过修改 `.env` 文件，在不修改代码的情况下，无缝在 Anthropic 和 OpenAI 兼容的后端之间进行切换。
 
-运行以下命令测试 OpenAI 兼容后端（以使用本地 Ollama 运行的 `qwen2.5-coder` 或在线的 DeepSeek API 为例）：
+在 `.env` 文件中配置 OpenAI 兼容后端（以使用本地 Ollama 运行的 `qwen2.5-coder` 或在线的 DeepSeek API 为例）：
 
-**macOS / Linux**:
 ```bash
-cd python
-export OPENAI_BASE_URL="http://localhost:11434/v1"  # 或在线 API 接口
-export OPENAI_API_KEY="ollama"                    # 在线 API 请填写实际 Key
-export MODEL="qwen2.5-coder"                       # 模型名称
-python -m mini_claude "列出当前目录下所有 .py 文件"
+# .env
+OPENAI_BASE_URL=http://localhost:11434/v1  # 或在线 API 接口
+OPENAI_API_KEY=ollama                      # 在线 API 请填写实际 Key
+MODEL=qwen2.5-coder                        # 模型名称
 ```
 
-**Windows (PowerShell)**:
-```powershell
+然后运行：
+
+```bash
 cd python
-$env:OPENAI_BASE_URL="http://localhost:11434/v1"
-$env:OPENAI_API_KEY="ollama"
-$env:MODEL="qwen2.5-coder"
 python -m mini_claude "列出当前目录下所有 .py 文件"
 ```
 
@@ -64,15 +60,15 @@ python -m mini_claude "列出当前目录下所有 .py 文件"
 
 ## 🚀 开始实现
 
-### 步骤 1：扩展 `Agent.__init__` 支持双客户端
+### 步骤 1：引入 `BackendConfig` 工厂模式
 
 #### 为什么做
 
-为了支持两套 API，我们需要在初始化时检测用户是否指定了 `api_base`（如 OpenAI 接口地址）。若指定了，则创建 `openai.AsyncOpenAI` 客户端，否则沿用 `anthropic.AsyncAnthropic` 客户端。
+为了支持两套 API，我们需要一个统一的配置层来封装后端选择逻辑。`BackendConfig` 负责"连哪个 API"，`AgentConfig` 负责"Agent 怎么跑"——两者各司其职。
 
 #### 做什么
 
-修改 `agent.py`，导入 `openai`，并在 `__init__` 中新增参数以支持实例化不同的客户端：
+修改 `agent.py`，新增 `BackendConfig` 类，导入 `openai`，并重构 `Agent.__init__`：
 
 ```python
 # agent.py
@@ -80,18 +76,57 @@ python -m mini_claude "列出当前目录下所有 .py 文件"
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 import anthropic
 import openai
 from .tools import execute_tool, get_tool_definitions
 
 
 @dataclass
+class BackendConfig:
+    """后端配置——封装后端选择逻辑，提供工厂方法"""
+    provider: Literal["anthropic", "openai"]
+    api_key: str
+    base_url: str | None = None
+    model: str = "claude-sonnet-4-6"
+
+    @classmethod
+    def from_env(cls, model: str | None = None, api_base_override: str | None = None) -> "BackendConfig":
+        """从环境变量自动检测后端类型并返回配置实例"""
+        if api_base_override:
+            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError("--api-base 需要设置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY")
+            return cls(provider="openai", api_key=api_key, base_url=api_base_override, model=model or "gpt-4o")
+        if os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_BASE_URL"):
+            return cls(provider="openai", api_key=os.environ["OPENAI_API_KEY"],
+                       base_url=os.environ["OPENAI_BASE_URL"], model=model or "gpt-4o")
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            return cls(provider="anthropic", api_key=os.environ["ANTHROPIC_API_KEY"],
+                       base_url=os.environ.get("ANTHROPIC_BASE_URL"), model=model or "claude-sonnet-4-6")
+        if os.environ.get("OPENAI_API_KEY"):
+            return cls(provider="openai", api_key=os.environ["OPENAI_API_KEY"],
+                       base_url=os.environ.get("OPENAI_BASE_URL"), model=model or "gpt-4o")
+        raise ValueError("未找到 API Key。请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY + OPENAI_BASE_URL")
+
+    def create_client(self) -> Any:
+        """工厂方法：根据 provider 创建对应的异步 SDK 客户端"""
+        if self.provider == "openai":
+            return openai.AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
+        kwargs: dict[str, Any] = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        return anthropic.AsyncAnthropic(**kwargs)
+
+    @property
+    def is_openai(self) -> bool:
+        return self.provider == "openai"
+
+
+@dataclass
 class AgentConfig:
-    """Agent 的静态配置"""
-    model: str = "claude-sonnet-4-6"  # 默认模型
-    api_base: str | None = None  # 自定义 API 地址，非空时启用 OpenAI 兼容模式
-    api_key: str | None = None  # API 密钥，可从环境变量或显式传入
+    """Agent 行为配置（不含后端信息）"""
+    pass
 
 
 @dataclass
@@ -126,13 +161,12 @@ class MessageHistory:
         return self._openai_messages
 
     def append_user_message(self, content: str | list) -> None:
-        """添加用户消息"""
+        """添加用户消息——两种协议格式相同，无需区分"""
         self.messages.append({"role": "user", "content": content})
 
     def append_assistant_message(self, content: Any) -> None:
         """添加助手回复。OpenAI 模式下保留 tool_calls 结构"""
         if self.use_openai and isinstance(content, dict) and "role" in content:
-            # OpenAI 模式：若已是完整 dict（含 tool_calls），直接追加
             self.messages.append(content)
         else:
             self.messages.append({"role": "assistant", "content": content})
@@ -140,43 +174,31 @@ class MessageHistory:
     def append_tool_results(self, results: list[dict]) -> None:
         """添加工具执行结果。两种协议的消息格式不同"""
         if self.use_openai:
-            # OpenAI：每个 tool 结果单独一条 role: "tool" 消息
             for r in results:
                 self.messages.append(r)
         else:
-            # Anthropic：多个 tool_result 包裹在一条 role: "user" 消息中
             self.messages.append({"role": "user", "content": results})
 
 
 class Agent:
-    def __init__(
-        self,
-        model: str = "claude-sonnet-4-6",
-        api_base: str | None = None,
-        api_key: str | None = None,
-    ):
-        self.config = AgentConfig(model=model, api_base=api_base, api_key=api_key)
+    def __init__(self, backend: BackendConfig):
+        self.backend = backend
+        self.config = AgentConfig()
         self.state = AgentState()
-        # 通过 api_base 是否存在来判断使用哪种后端
-        self.use_openai = bool(api_base)
+        self.use_openai = backend.is_openai
 
-        # 实例化统一消息历史管理
         system_prompt = "You are a helpful coding assistant with access to tools."
         self.history = MessageHistory(use_openai=self.use_openai, system_prompt=system_prompt)
 
-        if self.use_openai:
-            # 初始化 OpenAI 兼容客户端——可对接 DeepSeek、Ollama 等
-            self._openai_client = openai.AsyncOpenAI(base_url=api_base, api_key=api_key)
-            self._anthropic_client = None
-        else:
-            # 初始化 Anthropic 客户端——默认后端
-            self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
-            self._openai_client = None
+        # 通过 BackendConfig 工厂方法创建客户端——一行搞定
+        self._client = backend.create_client()
 ```
 
 #### 注意什么
 
-- `use_openai` 主要通过 `api_base` 是否存在来判断。
+- `BackendConfig.from_env()` 自动从环境变量检测后端类型，`api_base_override` 参数支持命令行 `--api-base` 覆盖。
+- `BackendConfig.create_client()` 是工厂方法，Agent 不需要知道如何创建客户端，只管调用。
+- `BackendConfig.is_openai` 属性用于判断当前后端类型。
 - 需要确保在 Python 虚拟环境中已安装 `openai` 库（可使用 `pip install openai` 安装）。
 
 ---
@@ -241,8 +263,8 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
 
         while True:
             # 2. 调用 OpenAI 兼容 API
-            response = await self._openai_client.chat.completions.create(
-                model=self.config.model,
+            response = await self._client.chat.completions.create(
+                model=self.backend.model,
                 messages=self.history.openai_messages,
                 tools=self._to_openai_tools(get_tool_definitions()),
             )
@@ -324,8 +346,8 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
         self.history.append_user_message(user_message)
 
         while True:
-            response = await self._anthropic_client.messages.create(
-                model=self.config.model,
+            response = await self._client.messages.create(
+                model=self.backend.model,
                 max_tokens=4096,
                 system="You are a helpful coding assistant with access to tools.",
                 tools=get_tool_definitions(),
@@ -375,7 +397,8 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
 
 #### 注意什么
 
-- 确保原 `_chat` 里的 `self._client` 改为了 `self._anthropic_client`（在 `__init__` 中已对应修改）。
+- `_chat_anthropic` 和 `_chat_openai` 都通过 `self._client` 调用 API。
+- 模型名称通过 `self.backend.model` 获取。
 
 ---
 
@@ -383,11 +406,11 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
 
 #### 为什么做
 
-我们需要在程序入口读取环境变量，让最终用户可以通过配置 `OPENAI_BASE_URL` 轻松测试 OpenAI 兼容后端，而无需手动修改代码。
+我们需要在程序入口读取环境变量，让最终用户可以通过配置 `OPENAI_BASE_URL` 轻松测试 OpenAI 兼容后端，而无需手动修改代码。`BackendConfig.from_env()` 封装了环境变量检测逻辑。
 
 #### 做什么
 
-修改 `__main__.py`，从环境变量中读取参数来实例化 `Agent`：
+修改 `__main__.py`，用 `BackendConfig.from_env()` 替代手动检测：
 
 ```python
 # __main__.py
@@ -396,30 +419,19 @@ import os
 import sys
 import asyncio
 from dotenv import load_dotenv
-from .agent import Agent
+from .agent import Agent, BackendConfig
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
 
 
 async def main():
-    """程序入口：读取环境变量和命令行参数，自动选择后端并启动 Agent"""
+    """程序入口：读取环境变量，自动选择后端并启动 Agent"""
     query = sys.argv[1] if len(sys.argv) > 1 else "列出当前目录下所有 .py 文件"
 
-    # 读取环境变量——兼容 OPENAI_BASE_URL 和 OPENAI_API_BASE 两种命名
-    api_base = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
-    api_key = os.environ.get("OPENAI_API_KEY")
-
-    # 若设置了 api_base 则默认使用 gpt-4o；否则默认使用 claude-sonnet-4-6
-    # 这样用户只需设置 BASE_URL 即可切换后端，无需手动指定模型
-    default_model = "gpt-4o" if api_base else "claude-sonnet-4-6"
-    model = os.environ.get("MODEL") or default_model
-
-    agent = Agent(
-        model=model,
-        api_base=api_base,
-        api_key=api_key,
-    )
+    model = os.environ.get("MODEL") or "claude-sonnet-4-6"
+    backend = BackendConfig.from_env(model=model)
+    agent = Agent(backend=backend)
     await agent._chat(query)
 
 
@@ -429,7 +441,9 @@ if __name__ == "__main__":
 
 #### 注意什么
 
-- 如果未配置 `OPENAI_BASE_URL`，默认行为依然会走 Anthropic 客户端，保持向后兼容。
+- 优先检测 `OPENAI_API_KEY` + `OPENAI_BASE_URL` 组合，其次 `ANTHROPIC_API_KEY`，最后兜底到单独的 `OPENAI_API_KEY`。
+- `api_base` 只传给 OpenAI 后端，`anthropic_base_url` 只传给 Anthropic 后端，两者互斥。
+- 如果未配置任何 API Key，程序会报错退出。
 
 ---
 
@@ -494,32 +508,25 @@ ANTHROPIC_API_KEY=your-api-key
 ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1  # 或你的代理地址
 ```
 
-Anthropic SDK 会自动读取 `ANTHROPIC_BASE_URL` 环境变量。在 `__main__.py` 中，我们通过 `anthropic_base_url` 参数传递给 Agent：
+`BackendConfig.from_env()` 会自动读取 `ANTHROPIC_BASE_URL` 并传给 `anthropic.AsyncAnthropic(base_url=...)`：
 
 ```python
-# __main__.py 中新增：读取 Anthropic 兼容后端配置
-anthropic_base_url = os.environ.get("ANTHROPIC_BASE_URL")
-agent = Agent(
-    model=model,
-    api_base=api_base,
-    anthropic_base_url=anthropic_base_url,
-    api_key=api_key,
-)
+# __main__.py — 无需手动处理，from_env() 自动检测
+backend = BackendConfig.from_env(model=model)
+agent = Agent(backend=backend)
 ```
 
-Agent 初始化时会根据 `anthropic_base_url` 决定是否使用自定义地址：
+`BackendConfig.create_client()` 内部处理了 `base_url` 的透传：
 
 ```python
-# agent.py 中的客户端初始化
-if self.use_openai:
-    self._openai_client = openai.AsyncOpenAI(base_url=api_base, api_key=api_key)
-else:
-    kwargs = {}
-    if api_key:
-        kwargs["api_key"] = api_key
-    if anthropic_base_url:
-        kwargs["base_url"] = anthropic_base_url
-    self._anthropic_client = anthropic.AsyncAnthropic(**kwargs)
+# BackendConfig.create_client() 内部逻辑
+def create_client(self):
+    if self.provider == "openai":
+        return openai.AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
+    kwargs = {"api_key": self.api_key}
+    if self.base_url:
+        kwargs["base_url"] = self.base_url
+    return anthropic.AsyncAnthropic(**kwargs)
 ```
 
 ### OpenAI 兼容格式（如 DeepSeek、Ollama、vLLM）
@@ -534,7 +541,7 @@ else:
 | Anthropic 兼容 | `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` | — | OpenRouter、中转代理 |
 | OpenAI 兼容 | `OPENAI_API_KEY` + `OPENAI_BASE_URL` | `MODEL` | DeepSeek、Ollama、vLLM |
 
-> 💡 当同时配置了 `OPENAI_BASE_URL` 和 `ANTHROPIC_BASE_URL` 时，`OPENAI_BASE_URL` 优先（因为 `api_base` 存在即启用 OpenAI 模式）。
+> 💡 当同时配置了 `OPENAI_API_KEY` + `OPENAI_BASE_URL` 和 `ANTHROPIC_API_KEY` 时，`BackendConfig.from_env()` 优先检测 OpenAI 组合（优先级 1），其次 Anthropic（优先级 2）。
 
 ---
 
@@ -575,8 +582,8 @@ OpenAI 协议中不支持顶层的 `system` 参数，必须作为 `{"role": "sys
 
 ```python
 # ❌ 错误：OpenAI completions 接口不支持顶层 system 参数
-response = await self._openai_client.chat.completions.create(
-    model=self.model,
+response = await self._client.chat.completions.create(
+    model=self.backend.model,
     system="...",
     messages=self._messages
 )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 import anthropic
 from anthropic.types import MessageParam, ToolUseBlockParam, TextBlockParam, ToolResultBlockParam
 from anthropic.types.tool_param import ToolParam
@@ -21,12 +21,62 @@ load_dotenv()
 @dataclass
 class AgentConfig:
     model: str = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
+    api_base: str | None = None  # 自定义 API 地址，非空时启用 OpenAI 兼容模式
+    api_key: str | None = None  # API 密钥，可从环境变量或显式传入
     temperature: float = 0.7
     max_tokens: int = 1000
 
 @dataclass
 class AgentState:
     pass
+
+class MessageHistory:
+    """统一 Anthropic/OpenAI 消息格式的抽象层"""
+    def __init__(self, use_openai: bool, system_prompt: str):
+        self.use_openai = use_openai
+        self.system_prompt = system_prompt
+        self._anthropic_messages: list[dict] = []
+        self._openai_messages: list[dict] = []
+        # OpenAI 协议要求 system prompt 作为消息列表的首条
+        if use_openai:
+            self._openai_messages.append({"role": "system", "content": system_prompt})
+
+    @property
+    def messages(self) -> list[dict]:
+        """根据当前后端返回对应的消息列表"""
+        return self._openai_messages if self.use_openai else self._anthropic_messages
+    
+    @property
+    def anthropic_messages(self) -> list[dict]:
+        return self._anthropic_messages
+
+    @property
+    def openai_messages(self) -> list[dict]:
+        return self._openai_messages
+    
+    def append_user_message(self, content: str | list) -> None:
+        """添加用户消息"""
+        self.messages.append({"role": "user", "content": content})
+
+    def append_assistant_message(self, content: Any) -> None:
+        """添加助手回复。OpenAI 模式下保留 tool_calls 结构"""
+        if self.use_openai and isinstance(content, dict) and "role" in content:
+            self.messages.append(content)
+        else:
+            self.messages.append({"role": "assistant", "content": content})
+
+    def append_tool_results(self, results: list[dict]) -> None:
+        """添加工具执行结果。两种协议的消息格式不同"""
+        if self.use_openai:
+            # OpenAI：每个 tool 结果单独一条 role: "tool" 消息
+            for r in results:
+                self.messages.append(r)
+        else:
+            # Anthropic：所有 tool 结果合并为一条 role: "user" 消息，content 是 tool_result 块数组
+            self.messages.append({"role": "user", "content": results})
+            
+
+
 
 class Agent:
     def __init__(self, config: AgentConfig):

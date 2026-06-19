@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any, Callable, Awaitable, Literal
 
 import anthropic
 import openai
@@ -170,13 +170,90 @@ async def _with_retry(fn, max_retries: int = MAX_RETRIES):
 
 
 @dataclass
+class BackendConfig:
+    """后端配置——封装后端选择逻辑，提供工厂方法"""
+    provider: Literal["anthropic", "openai"]
+    api_key: str
+    base_url: str | None = None
+    model: str = "claude-opus-4-6"
+
+    @classmethod
+    def from_env(
+        cls,
+        model: str | None = None,
+        api_base_override: str | None = None,
+    ) -> "BackendConfig":
+        """从环境变量自动检测后端类型并返回配置实例
+
+        优先级：
+        0. api_base_override 存在 → 强制 OpenAI 模式（命令行 --api-base）
+        1. OPENAI_API_KEY + OPENAI_BASE_URL → OpenAI 兼容
+        2. ANTHROPIC_API_KEY → Anthropic（可选 ANTHROPIC_BASE_URL）
+        3. 单独 OPENAI_API_KEY → OpenAI（兜底）
+        4. 都没有 → 抛出 ValueError
+        """
+        if api_base_override:
+            api_key = (
+                os.environ.get("OPENAI_API_KEY")
+                or os.environ.get("ANTHROPIC_API_KEY")
+            )
+            if not api_key:
+                raise ValueError("--api-base 需要设置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY")
+            return cls(
+                provider="openai",
+                api_key=api_key,
+                base_url=api_base_override,
+                model=model or "gpt-4o",
+            )
+        if os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_BASE_URL"):
+            return cls(
+                provider="openai",
+                api_key=os.environ["OPENAI_API_KEY"],
+                base_url=os.environ.get("OPENAI_BASE_URL"),
+                model=model or "gpt-4o",
+            )
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            return cls(
+                provider="anthropic",
+                api_key=os.environ["ANTHROPIC_API_KEY"],
+                base_url=os.environ.get("ANTHROPIC_BASE_URL"),
+                model=model or "claude-opus-4-6",
+            )
+        if os.environ.get("OPENAI_API_KEY"):
+            return cls(
+                provider="openai",
+                api_key=os.environ["OPENAI_API_KEY"],
+                base_url=os.environ.get("OPENAI_BASE_URL"),
+                model=model or "gpt-4o",
+            )
+        raise ValueError(
+            "未找到 API Key。请设置以下任一环境变量：\n"
+            "  ANTHROPIC_API_KEY（Anthropic 后端）\n"
+            "  OPENAI_API_KEY + OPENAI_BASE_URL（OpenAI 兼容后端）"
+        )
+
+    def create_client(self) -> Any:
+        """工厂方法：根据 provider 创建对应的异步 SDK 客户端"""
+        if self.provider == "openai":
+            return openai.AsyncOpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+            )
+        kwargs: dict[str, Any] = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        return anthropic.AsyncAnthropic(**kwargs)
+
+    @property
+    def is_openai(self) -> bool:
+        """是否使用 OpenAI 兼容后端"""
+        return self.provider == "openai"
+
+
+@dataclass
 class AgentConfig:
     """Agent configuration. permission_mode is mutable (toggle_plan_mode)."""
     permission_mode: str = "default"
-    model: str = "claude-opus-4-6"
-    api_base: str | None = None
-    anthropic_base_url: str | None = None
-    api_key: str | None = None
     thinking: bool = False
     max_cost_usd: float | None = None
     max_turns: int | None = None
@@ -319,11 +396,8 @@ class Agent:
     def __init__(
         self,
         *,
+        backend: BackendConfig,
         permission_mode: PermissionMode = "default",
-        model: str = "claude-opus-4-6",
-        api_base: str | None = None,
-        anthropic_base_url: str | None = None,
-        api_key: str | None = None,
         thinking: bool = False,
         max_cost_usd: float | None = None,
         max_turns: int | None = None,
@@ -332,13 +406,12 @@ class Agent:
         custom_tools: list[ToolDef] | None = None,
         is_sub_agent: bool = False,
     ):
-        # Configuration
+        # Backend configuration
+        self.backend = backend
+
+        # Agent configuration
         self.config = AgentConfig(
             permission_mode=permission_mode,
-            model=model,
-            api_base=api_base,
-            anthropic_base_url=anthropic_base_url,
-            api_key=api_key,
             thinking=thinking,
             max_cost_usd=max_cost_usd,
             max_turns=max_turns,
@@ -355,9 +428,9 @@ class Agent:
         self._plan_approval_fn: Callable[[str], Awaitable[dict]] | None = None
 
         # Derived properties
-        self.use_openai = bool(api_base)
+        self.use_openai = backend.is_openai
         self.tools = custom_tools or tool_definitions
-        self.effective_window = _get_context_window(model) - CONTEXT_WINDOW_SAFETY_MARGIN
+        self.effective_window = _get_context_window(backend.model) - CONTEXT_WINDOW_SAFETY_MARGIN
         self.session_id = uuid.uuid4().hex[:8]
         self.session_start_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -379,18 +452,8 @@ class Agent:
         # Unified message history
         self.history = MessageHistory(self.use_openai, self._system_prompt)
 
-        # Initialize API clients
-        if self.use_openai:
-            self._openai_client = openai.AsyncOpenAI(base_url=api_base, api_key=api_key)
-            self._anthropic_client = None
-        else:
-            kwargs: dict[str, Any] = {}
-            if api_key:
-                kwargs["api_key"] = api_key
-            if anthropic_base_url:
-                kwargs["base_url"] = anthropic_base_url
-            self._anthropic_client = anthropic.AsyncAnthropic(**kwargs)
-            self._openai_client = None
+        # Initialize API client via BackendConfig factory
+        self._client = backend.create_client()
 
     def _update_system_prompt(self) -> None:
         self._base_system_prompt = self.config.custom_system_prompt or build_system_prompt()
@@ -410,7 +473,7 @@ class Agent:
 
     @property
     def model(self) -> str:
-        return self.config.model
+        return self.backend.model
 
     @property
     def is_sub_agent(self) -> bool:
@@ -461,9 +524,9 @@ class Agent:
     def _resolve_thinking_mode(self) -> str:
         if not self.config.thinking:
             return "disabled"
-        if not _model_supports_thinking(self.config.model):
+        if not _model_supports_thinking(self.backend.model):
             return "disabled"
-        if _model_supports_adaptive_thinking(self.config.model):
+        if _model_supports_adaptive_thinking(self.backend.model):
             return "adaptive"
         return "enabled"
 
@@ -471,9 +534,9 @@ class Agent:
 
     def _build_side_query(self) -> Callable[[str, str], Awaitable[str]] | None:
         """Build a sideQuery callable for memory recall, works with both backends."""
-        if self._anthropic_client:
-            client = self._anthropic_client
-            model = self.config.model
+        client = self._client
+        model = self.backend.model
+        if not self.use_openai:
 
             async def _sq(system: str, user_message: str) -> str:
                 resp = await client.messages.create(
@@ -482,21 +545,17 @@ class Agent:
                 )
                 return "".join(b.text for b in resp.content if b.type == "text")
             return _sq
-        if self._openai_client:
-            client = self._openai_client
-            model = self.config.model
 
-            async def _sq_oai(system: str, user_message: str) -> str:
-                resp = await client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user_message},
-                    ],
-                )
-                return resp.choices[0].message.content or "" if resp.choices else ""
-            return _sq_oai
-        return None
+        async def _sq_oai(system: str, user_message: str) -> str:
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_message},
+                ],
+            )
+            return resp.choices[0].message.content or "" if resp.choices else ""
+        return _sq_oai
 
     # ─── Abort and callbacks ─────────────────────────────────
 
@@ -631,7 +690,7 @@ class Agent:
             save_session(self.session_id, {
                 "metadata": {
                     "id": self.session_id,
-                    "model": self.config.model,
+                    "model": self.backend.model,
                     "cwd": str(Path.cwd()),
                     "startTime": self.session_start_time,
                     "messageCount": self.history.message_count(),
@@ -660,8 +719,8 @@ class Agent:
         if len(messages) < 4:
             return
         last_user_msg = messages[-1]
-        summary_resp = await self._anthropic_client.messages.create(
-            model=self.config.model,
+        summary_resp = await self._client.messages.create(
+            model=self.backend.model,
             max_tokens=2048,
             system="You are a conversation summarizer. Be concise but preserve important details.",
             messages=[
@@ -685,8 +744,8 @@ class Agent:
             return
         system_msg = messages[0]
         last_user_msg = messages[-1]
-        summary_resp = await self._openai_client.chat.completions.create(
-            model=self.config.model,
+        summary_resp = await self._client.chat.completions.create(
+            model=self.backend.model,
             messages=[  # type: ignore[arg-type]
                 {"role": "system", "content": "You are a conversation summarizer. Be concise but preserve important details."},
                 *messages[1:-1],
@@ -881,8 +940,7 @@ class Agent:
             )
             print_sub_agent_start("skill-fork", inp.get("skill_name", ""))
             sub_agent = Agent(
-                model=self.config.model,
-                api_base=str(self._openai_client.base_url) if self.use_openai and self._openai_client else None,
+                backend=self.backend,
                 custom_system_prompt=result["prompt"],
                 custom_tools=tools,
                 is_sub_agent=True,
@@ -1020,8 +1078,7 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
 
         config = get_sub_agent_config(agent_type)
         sub_agent = Agent(
-            model=self.config.model,
-            api_base=str(self._openai_client.base_url) if self.use_openai and self._openai_client else None,
+            backend=self.backend,
             custom_system_prompt=config["system_prompt"],
             custom_tools=config["tools"],
             is_sub_agent=True,
@@ -1162,9 +1219,9 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
     async def _call_anthropic_stream(self, on_tool_block_complete=None) -> Any:
         """Stream an Anthropic API call with streaming tool execution support."""
         async def _do():
-            max_output = _get_max_output_tokens(self.config.model)
+            max_output = _get_max_output_tokens(self.backend.model)
             create_params: dict[str, Any] = {
-                "model": self.config.model,
+                "model": self.backend.model,
                 "max_tokens": max_output if self.state.thinking_mode != "disabled" else 16384,
                 "system": self._system_prompt,
                 "tools": get_active_tool_definitions(self.tools),
@@ -1177,7 +1234,7 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
             first_text = True
             tool_blocks_by_index: dict[int, dict] = {}
 
-            async with self._anthropic_client.messages.stream(**create_params) as stream:
+            async with self._client.messages.stream(**create_params) as stream:
                 async for event in stream:
                     if not hasattr(event, 'type'):
                         continue
@@ -1355,8 +1412,8 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
 
     async def _call_openai_stream(self) -> Any:
         async def _do():
-            stream = await self._openai_client.chat.completions.create(
-                model=self.config.model,
+            stream = await self._client.chat.completions.create(
+                model=self.backend.model,
                 tools=_to_openai_tools(get_active_tool_definitions(self.tools)),  # type: ignore[arg-type]
                 messages=self.history.openai_messages,  # type: ignore[arg-type]
                 stream=True,

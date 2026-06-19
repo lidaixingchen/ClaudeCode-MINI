@@ -86,7 +86,7 @@ load_dotenv()
 @dataclass
 class AgentConfig:
     """Agent 的静态配置，运行期间保持不变"""
-    model: str = os.getenv("OPENAI_MODEL", "claude-sonnet-4-6")  # 默认使用的 LLM 模型
+    model: str = "claude-sonnet-4-6"  # 默认使用的 LLM 模型
 
 
 @dataclass
@@ -396,7 +396,7 @@ if __name__ == "__main__":
 ### AgentConfig（配置）
 - **职责**：定义 Agent 的静态或相对稳定的配置。
 - **特点**：在创建时确定，运行期间基本保持不变，容易序列化与比较。
-- **包含属性**：`model`, `permission_mode`, `max_cost_usd`, `api_base` 等。
+- **包含属性**：`permission_mode`, `max_cost_usd`, `max_turns` 等。
 
 ### AgentState（状态）
 - **职责**：维护 Agent 运行过程中的动态状态。
@@ -548,4 +548,4 @@ python -m mini_claude "列出当前目录下所有 .py 文件"
 4. **一个最简 Agent 只需要 ~60 行代码**：消息数组 + while 循环 + 工具执行 + 结果回填——复杂性来自后续的工程优化，不是核心逻辑。
 
 ---
-> **下一章**：当前 Agent 只支持 Anthropic 后端。如果想接 OpenAI 兼容的 API（如 GPT-4o）怎么办？我们来看双后端架构的实现。
+> **下一章**：当前 Agent 只支持 Anthropic 后端。第二课将引入 `BackendConfig` 工厂模式，实现双后端支持——让 Agent 能同时使用 Anthropic 和 OpenAI 兼容的 API。

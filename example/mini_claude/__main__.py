@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # 加载 .env 文件中的环境变量（如 ANTHROPIC_API_KEY）
 load_dotenv()
 
-from .agent import Agent
+from .agent import Agent, BackendConfig
 from .ui import print_welcome, print_user_prompt, print_error, print_info, print_plan_for_approval, print_plan_approval_options
 from .session import load_session, get_latest_session_id
 from .memory import list_memories
@@ -235,47 +235,19 @@ Examples:
 
     permission_mode = _resolve_permission_mode(args)
     model = args.model or os.environ.get("MINI_CLAUDE_MODEL", "claude-opus-4-6")
-    api_base = args.api_base
 
-    # Resolve API config
-    resolved_api_base = api_base
-    resolved_api_key: str | None = None
-    resolved_use_openai = bool(api_base)
-
-    if os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_BASE_URL"):
-        resolved_api_key = os.environ["OPENAI_API_KEY"]
-        resolved_api_base = resolved_api_base or os.environ.get("OPENAI_BASE_URL")
-        resolved_use_openai = True
-    elif os.environ.get("ANTHROPIC_API_KEY"):
-        resolved_api_key = os.environ["ANTHROPIC_API_KEY"]
-        resolved_api_base = resolved_api_base or os.environ.get("ANTHROPIC_BASE_URL")
-        resolved_use_openai = False
-    elif os.environ.get("OPENAI_API_KEY"):
-        resolved_api_key = os.environ["OPENAI_API_KEY"]
-        resolved_api_base = resolved_api_base or os.environ.get("OPENAI_BASE_URL")
-        resolved_use_openai = True
-
-    if not resolved_api_key and api_base:
-        resolved_api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-        resolved_use_openai = True
-
-    if not resolved_api_key:
-        print_error(
-            "API key is required.\n"
-            "  Set ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL) for Anthropic format,\n"
-            "  or OPENAI_API_KEY + OPENAI_BASE_URL for OpenAI-compatible format."
-        )
+    try:
+        backend = BackendConfig.from_env(model=model, api_base_override=args.api_base)
+    except ValueError as e:
+        print_error(str(e))
         sys.exit(1)
 
     agent = Agent(
+        backend=backend,
         permission_mode=permission_mode,
-        model=model,
         thinking=args.thinking,
         max_cost_usd=args.max_cost,
         max_turns=args.max_turns,
-        api_base=resolved_api_base if resolved_use_openai else None,
-        anthropic_base_url=resolved_api_base if not resolved_use_openai else None,
-        api_key=resolved_api_key,
     )
 
     # Resume session
