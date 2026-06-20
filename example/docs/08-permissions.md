@@ -308,17 +308,108 @@ def check_permission(
 
 #### 做什么
 
-修改 `agent.py`，实现 `_confirm_dangerous` 并重构工具执行处理循环：
+首先，在 `tools.py` 中添加权限模式的类型定义：
+
+```python
+# tools.py 顶部添加
+
+from typing import Literal
+
+# 权限安全模式：5 种预设选项
+PermissionMode = Literal["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"]
+```
+
+然后，在 `__main__.py` 中添加权限相关的命令行参数：
+
+```python
+# __main__.py 中的修改
+
+from tools import PermissionMode
+
+
+def parse_args() -> argparse.Namespace:
+    """解析命令行参数，返回命名空间对象。"""
+    parser = argparse.ArgumentParser(
+        prog="mini-claude",
+        description="Mini Claude Code — a minimal coding agent",
+        add_help=False,
+    )
+    parser.add_argument("prompt", nargs="*", help="One-shot prompt")
+    # 权限控制参数（第 08 课新增）
+    parser.add_argument("--yolo", "-y", action="store_true",
+                        help="Skip all confirmation prompts")
+    parser.add_argument("--plan", action="store_true",
+                        help="Plan mode: read-only")
+    parser.add_argument("--accept-edits", action="store_true",
+                        help="Auto-approve file edits")
+    parser.add_argument("--dont-ask", action="store_true",
+                        help="Auto-deny confirmations (for CI)")
+    # 原有参数保持不变
+    parser.add_argument("--model", "-m", default=None, help="Model to use")
+    parser.add_argument("--api-base", default=None,
+                        help="OpenAI-compatible API base URL")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume last session")
+    parser.add_argument("--max-cost", type=float, default=None,
+                        help="Max USD spend")
+    parser.add_argument("--max-turns", type=int, default=None,
+                        help="Max agentic turns")
+    parser.add_argument("--help", "-h", action="store_true",
+                        help="Show help")
+    return parser.parse_args()
+
+
+def _resolve_permission_mode(args: argparse.Namespace) -> PermissionMode:
+    """将命令行权限参数映射为 Agent 内部权限模式字符串。"""
+    if args.yolo:
+        return "bypassPermissions"
+    if args.plan:
+        return "plan"
+    if args.accept_edits:
+        return "acceptEdits"
+    if args.dont_ask:
+        return "dontAsk"
+    return "default"
+
+
+def main() -> None:
+    args = parse_args()
+    # ... 其他代码 ...
+    permission_mode = _resolve_permission_mode(args)
+    agent = Agent(backend=backend, permission_mode=permission_mode)
+    # ...
+```
+
+最后，修改 `agent.py`，添加权限相关的方法并重构工具执行处理循环：
 
 ```python
 # agent.py 中的修改
 
+import asyncio
+from dataclasses import dataclass, field
 from tools import check_permission  # 导入权限检查引擎
+
+
+@dataclass
+class AgentState:
+    """Agent 的运行时状态"""
+    confirmed_paths: set[str] = field(default_factory=set)  # 已确认的路径白名单
+    current_task: asyncio.Task | None = None  # 当前正在执行的任务
 
 
 class Agent:
     # ... 已经在 AgentConfig 中增加了 permission_mode
-    # ... 已经在 AgentState 中增加了 confirmed_paths: set[str] = field(default_factory=set)
+    # ... 在 __init__ 中初始化：
+    #     self.confirm_fn = None  # 确认回调函数，由 REPL 注入
+
+    @property
+    def is_processing(self) -> bool:
+        """判断 Agent 是否正在执行任务（供 SIGINT 信号处理器使用）"""
+        return self.state.current_task is not None and not self.state.current_task.done()
+
+    def set_confirm_fn(self, fn) -> None:
+        """设置确认回调函数（供 REPL 注入 y/n 确认逻辑）"""
+        self.confirm_fn = fn
 
     # 弹窗询问用户是否允许危险操作，返回 True/False
     async def _confirm_dangerous(self, message: str) -> bool:
@@ -372,11 +463,31 @@ class Agent:
 
                 # 【2. 常规工具执行】
                 # 此处省略原有执行工具与 early_task 判断，直接调用 execute_tool ...
+```
 
+最后，在 `__main__.py` 的 REPL 中注入确认回调：
+
+```python
+# __main__.py 中的修改
+
+async def run_repl(agent: Agent) -> None:
+    """交互式 REPL 循环：读取用户输入、分发命令。"""
+
+    async def confirm_fn(message: str) -> bool:
+        """确认回调：Agent 在需要用户授权时暂停执行并等待终端输入 y/n。"""
+        try:
+            answer = input("  Allow? (y/n): ")
+            return answer.lower().startswith("y")
+        except EOFError:
+            return False
+
+    agent.set_confirm_fn(confirm_fn)  # 注入确认回调
+    # ... 其余 REPL 逻辑不变
+```
 
 #### 注意什么
 
-- **使用 Literal 强化类型约束**：在定义权限安全模式时，我们有 5 种预设的选项：`default`（默认模式）、`plan`（规划模式）、`acceptEdits`（自动接受修改）、`bypassPermissions`（YOLO 模式）、`dontAsk`（CI 模式）。如果我们将这个权限模式定义为普通的字符串类型（`str`），在代码调用和参数传递中容易因为拼写错误而引入隐蔽的 Bug。因此，建议使用 Python typing 模块中的 `Literal` 类型：`PermissionMode = Literal["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"]` 并在匹配时做静态分析。
+- **PermissionMode 类型**：`PermissionMode` 在本课的 `tools.py` 中定义为 `Literal` 类型，包含 5 种预设选项：`default`（默认模式）、`plan`（规划模式）、`acceptEdits`（自动接受修改）、`bypassPermissions`（YOLO 模式）、`dontAsk`（CI 模式）。使用 `Literal` 而非普通 `str` 可以在静态分析时捕获拼写错误。
 - **避免高频频繁询问**：通过会话级白名单 `confirmed_paths` 缓存已授权的路径，能够保证在同一个会话中 Agent 修改同一个文件时，用户只需确认一次，有效减少了弹窗对开发流程的心智干扰。
 
 ---
@@ -426,6 +537,7 @@ if perm["action"] == "deny":
 ### 输入与验证
 
 1. 在当前目录下建立一个 `.claude` 目录并在里面创建 `settings.json`：
+
    ```json
    {
      "permissions": {
@@ -435,7 +547,9 @@ if perm["action"] == "deny":
      }
    }
    ```
+
 2. 启动 Agent，要求其测试 push：
+
    ```bash
    python __main__.py "将代码强推上库"
    ```

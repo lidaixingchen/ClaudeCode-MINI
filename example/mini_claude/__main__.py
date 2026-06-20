@@ -277,7 +277,10 @@ Examples:
             sys.exit(1)
     else:
         # Interactive REPL
-        asyncio.run(run_repl(agent))
+        try:
+            asyncio.run(run_repl(agent))
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

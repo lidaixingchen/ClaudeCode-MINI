@@ -19,7 +19,7 @@ python __main__.py
   Mini Claude Code — A minimal coding agent
 
   Type your request, or 'exit' to quit.
-  Commands: /clear /plan /cost
+  Commands: /clear /cost
 
 > hello
 ```
@@ -136,9 +136,50 @@ def get_latest_session_id() -> str | None:
 
 #### 做什么
 
-修改 `agent.py`。
-1. 在初始化中定义唯一的 `session_id` 和 `session_start_time`。
-2. 封装公共 `chat` 方法，并在其中添加 `_auto_save()` 和 `restore_session()` 逻辑。
+修改 `agent.py`，需要完成三件事：
+
+1. 为 `MessageHistory` 类补充会话持久化相关的方法。
+2. 在 `Agent` 初始化中定义唯一的 `session_id` 和 `session_start_time`。
+3. 封装公共 `chat` 方法，并在其中添加 `_auto_save()` 和 `restore_session()` 逻辑。
+
+首先，在 `MessageHistory` 类中补充以下方法（会话持久化需要用到）：
+
+```python
+# MessageHistory 类中新增的方法
+
+def message_count(self) -> int:
+    """返回消息总数（不含系统提示词）"""
+    if self.use_openai:
+        # OpenAI 模式下减去首条系统消息
+        return len(self._openai_messages) - 1
+    return len(self._anthropic_messages)
+
+def to_dict(self) -> dict[str, list[dict]]:
+    """将消息历史序列化为字典，用于会话持久化"""
+    return {
+        "anthropicMessages": self._anthropic_messages,
+        "openaiMessages": self._openai_messages,
+    }
+
+def restore(self, data: dict[str, list[dict]]) -> None:
+    """从持久化数据恢复消息历史"""
+    if "anthropicMessages" in data and data["anthropicMessages"]:
+        self._anthropic_messages = data["anthropicMessages"]
+    if "openaiMessages" in data and data["openaiMessages"]:
+        self._openai_messages = data["openaiMessages"]
+
+def clear(self, keep_system: bool = True) -> None:
+    """清空消息历史"""
+    self._anthropic_messages.clear()
+    if keep_system and self.use_openai:
+        # 保留系统提示词
+        self._openai_messages.clear()
+        self._openai_messages.append({"role": "system", "content": self.system_prompt})
+    else:
+        self._openai_messages.clear()
+```
+
+然后，修改 `Agent` 类：
 
 ```python
 # agent.py 中的修改
@@ -189,7 +230,7 @@ class Agent:
             save_session(self.session_id, {
                 "metadata": {
                     "id": self.session_id,
-                    "model": self.config.model,
+                    "model": self.backend.model,
                     "cwd": str(Path.cwd()),
                     "startTime": self.session_start_time,
                     "messageCount": self.history.message_count(),
@@ -218,44 +259,108 @@ class Agent:
 
 ---
 
-### 步骤 3：创建最简终端 UI 辅助库 `ui.py`
+### 步骤 3：创建终端 UI 辅助库 `ui.py`
 
 #### 为什么做
 
-接下来的 `__main__.py` 需要打印欢迎横幅、输入提示符、错误信息等格式化输出。我们将这些重复的终端打印逻辑抽取到独立的 `ui.py` 中，保持 `__main__.py` 的整洁。后续章节会逐步丰富这个模块的渲染能力（如颜色、Spinner 动画），但本课只需要最基础的 `print` 封装。
+接下来的 `__main__.py` 需要打印欢迎横幅、输入提示符、错误信息等格式化输出。我们将这些重复的终端打印逻辑抽取到独立的 `ui.py` 中，保持 `__main__.py` 的整洁。我们使用 `rich` 库来实现彩色终端输出，它提供了比原生 `print()` 更强大的格式化能力。
 
 #### 做什么
 
-创建 `ui.py`，定义四个基础输出函数：
+首先安装依赖：
+
+```bash
+pip install rich
+```
+
+然后创建 `ui.py`，使用 `rich` 库定义基础输出函数和 Spinner 动画：
 
 ```python
 # ui.py — 终端 UI 辅助函数
 
+import sys
+import threading
+import time
+
+from rich.console import Console
+
+console = Console(highlight=False)
+
+
+# ─── Basic output ──────────────────────────────────────────
+
+
 def print_welcome() -> None:
     """打印欢迎横幅和使用提示。"""
-    print("  Mini Claude Code — A minimal coding agent\n")
-    print("  Type your request, or 'exit' to quit.")
-    print("  Commands: /clear /plan /cost\n")
+    console.print("\n  [bold cyan]Mini Claude Code[/bold cyan][dim] — A minimal coding agent[/dim]\n")
+    console.print("[dim]  Type your request, or 'exit' to quit.[/dim]")
+    console.print("[dim]  Commands: /clear /cost[/dim]\n")
 
 
 def print_user_prompt() -> None:
     """打印用户输入提示符（不换行，等待用户输入）。"""
-    print("\n> ", end="")
+    console.print("\n[bold green]> [/bold green]", end="")
 
 
 def print_error(msg: str) -> None:
-    """打印错误信息（红色标签，后续引入 rich 库后会渲染颜色）。"""
-    print(f"  [red]Error: {msg}[/red]")
+    """打印错误信息（红色）。"""
+    console.print(f"\n  [red]Error: {msg}[/red]")
 
 
 def print_info(msg: str) -> None:
-    """打印提示信息（青色标签，用于状态通知）。"""
-    print(f"  [cyan]ℹ {msg}[/cyan]")
+    """打印提示信息（青色，用于状态通知）。"""
+    console.print(f"\n  [cyan]ℹ {msg}[/cyan]")
+
+
+# ─── Spinner ──────────────────────────────────────────────
+
+# Spinner 动画帧序列（Braille 字符）
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+_spinner_thread: threading.Thread | None = None
+_spinner_stop = threading.Event()
+
+
+def start_spinner(label: str = "Thinking") -> None:
+    """启动 Spinner 动画，在后台线程中运行。"""
+    global _spinner_thread
+    if _spinner_thread is not None:
+        return
+    _spinner_stop.clear()
+
+    def _run() -> None:
+        frame = 0
+        sys.stdout.write(f"\n  {SPINNER_FRAMES[0]} {label}...")
+        sys.stdout.flush()
+        while not _spinner_stop.is_set():
+            time.sleep(0.08)
+            frame = (frame + 1) % len(SPINNER_FRAMES)
+            sys.stdout.write(f"\r  {SPINNER_FRAMES[frame]} {label}...")
+            sys.stdout.flush()
+
+    _spinner_thread = threading.Thread(target=_run, daemon=True)
+    _spinner_thread.start()
+
+
+def stop_spinner() -> None:
+    """停止 Spinner 动画并清除该行。"""
+    global _spinner_thread
+    if _spinner_thread is None:
+        return
+    _spinner_stop.set()
+    _spinner_thread.join(timeout=1)
+    _spinner_thread = None
+    sys.stdout.write("\r\033[K")
+    sys.stdout.flush()
 ```
 
 #### 注意什么
 
-- 此刻的 `print_info` 和 `print_error` 只是简单的字符串打印，`[red]`/`[cyan]` 标签不会渲染颜色（需要后续引入 `rich` 库）。这不影响功能正确性，先让代码跑起来。
+- `Console(highlight=False)` 禁用自动高亮，避免将数字、URL 等自动渲染为特殊样式。
+- `rich` 的标记语法 `[red]`、`[cyan]`、`[bold]`、`[dim]` 等会真正渲染颜色，比原生 `print()` 体验更好。
+- Spinner 使用 Braille 字符（⠋⠙⠹...）实现动画效果，在后台线程中运行，不会阻塞主循环。
+- `stop_spinner()` 使用 `\r\033[K` 清除当前行，确保 Spinner 消失后终端干净。
+- 第 7 课实现流式输出时，会在首个文本到达时调用 `stop_spinner()` 停止动画。
 
 ---
 
@@ -267,7 +372,7 @@ def print_info(msg: str) -> None:
 
 #### 做什么
 
-重写 `__main__.py` 中的 `parse_args()`、`main()` 等函数，接入参数解析与会话恢复流程。注意此处的参数列表比初始版本更完整——新增了 `--yolo`、`--plan`、`--accept-edits`、`--dont-ask`、`--thinking`、`--max-cost`、`--max-turns` 等权限和预算控制参数，并通过 `_resolve_permission_mode()` 将它们映射为 Agent 内部的权限模式字符串：
+重写 `__main__.py` 中的 `parse_args()`、`main()` 等函数，接入参数解析与会话恢复流程：
 
 ```python
 # __main__.py — 命令行入口与 REPL 循环
@@ -278,7 +383,6 @@ import signal
 import asyncio
 import argparse
 from agent import Agent, BackendConfig
-from tools import PermissionMode
 from session import load_session, get_latest_session_id
 from ui import print_welcome, print_user_prompt, print_error, print_info
 
@@ -291,41 +395,14 @@ def parse_args() -> argparse.Namespace:
         add_help=False,  # 手动处理 --help 以自定义格式
     )
     parser.add_argument("prompt", nargs="*", help="One-shot prompt")
-    parser.add_argument("--yolo", "-y", action="store_true",
-                        help="Skip all confirmation prompts")
-    parser.add_argument("--plan", action="store_true",
-                        help="Plan mode: read-only")
-    parser.add_argument("--accept-edits", action="store_true",
-                        help="Auto-approve file edits")
-    parser.add_argument("--dont-ask", action="store_true",
-                        help="Auto-deny confirmations (for CI)")
-    parser.add_argument("--thinking", action="store_true",
-                        help="Enable extended thinking")
     parser.add_argument("--model", "-m", default=None, help="Model to use")
     parser.add_argument("--api-base", default=None,
                         help="OpenAI-compatible API base URL")
     parser.add_argument("--resume", action="store_true",
                         help="Resume last session")
-    parser.add_argument("--max-cost", type=float, default=None,
-                        help="Max USD spend")
-    parser.add_argument("--max-turns", type=int, default=None,
-                        help="Max agentic turns")
     parser.add_argument("--help", "-h", action="store_true",
                         help="Show help")
     return parser.parse_args()
-
-
-def _resolve_permission_mode(args: argparse.Namespace) -> PermissionMode:
-    """将命令行权限参数映射为 Agent 内部权限模式字符串。"""
-    if args.yolo:
-        return "bypassPermissions"
-    if args.plan:
-        return "plan"
-    if args.accept_edits:
-        return "acceptEdits"
-    if args.dont_ask:
-        return "dontAsk"
-    return "default"
 
 
 def main() -> None:
@@ -337,39 +414,25 @@ def main() -> None:
 Usage: mini-claude [options] [prompt]
 
 Options:
-  --yolo, -y          Skip all confirmation prompts (bypassPermissions mode)
-  --plan              Plan mode: read-only, describe changes without executing
-  --accept-edits      Auto-approve file edits, still confirm dangerous shell
-  --dont-ask          Auto-deny anything needing confirmation (for CI)
-  --thinking          Enable extended thinking (Anthropic only)
   --model, -m         Model to use (default: claude-opus-4-6, or MODEL_NAME env)
   --api-base URL      Use OpenAI-compatible API endpoint (key via env var)
   --resume            Resume the last session
-  --max-cost USD      Stop when estimated cost exceeds this amount
-  --max-turns N       Stop after N agentic turns
   --help, -h          Show this help
 
 REPL commands:
   /clear              Clear conversation history
-  /plan               Toggle plan mode (read-only <-> normal)
   /cost               Show token usage and cost
   /compact            Manually compact conversation
-  /memory             List saved memories
-  /skills             List available skills
-  /<skill-name>       Invoke a skill (e.g. /commit "fix types")
 
 Examples:
   mini-claude "fix the bug in src/app.ts"
-  mini-claude --yolo "run all tests and fix failures"
-  mini-claude --plan "how would you refactor this?"
-  mini-claude --max-cost 0.50 --max-turns 20 "implement feature X"
+  mini-claude --model gpt-4o "hello"
   OPENAI_API_KEY=sk-xxx mini-claude --api-base https://aihubmix.com/v1 --model gpt-4o "hello"
   mini-claude --resume
   mini-claude  # starts interactive REPL
 """)
         sys.exit(0)
 
-    permission_mode = _resolve_permission_mode(args)
     # 模型选择优先级：命令行参数 > 环境变量 > 默认值
     model = args.model or os.environ.get("MODEL_NAME", "claude-opus-4-6")
     api_base = args.api_base
@@ -410,7 +473,10 @@ Examples:
             sys.exit(1)
     else:
         # 交互式 REPL 模式
-        asyncio.run(run_repl(agent))
+        try:
+            asyncio.run(run_repl(agent))
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
@@ -419,56 +485,22 @@ if __name__ == "__main__":
 
 ---
 
-### 步骤 5：构建交互式 REPL 循环与信号拦截
+### 步骤 5：构建交互式 REPL 循环
 
 #### 为什么做
 
-在交互模式下，如果大模型输出失控或执行了错误的工具，用户按下 `Ctrl+C` 的首要期望是**终止本次 Agent 执行并退回输入提示符**，而不是直接杀掉整个进程导致历史记录全部丢失。只有在没有任务执行且处于输入状态下连续按下 `Ctrl+C` 时，才应该退出程序。
+交互模式是 Agent 最常见的使用方式。用户输入一条消息，Agent 回复，循环往复，直到用户输入 `exit` 或 `quit` 退出。REPL（Read-Eval-Print Loop）就是这个"读取-执行-打印-循环"的过程。
 
 #### 做什么
 
-在 `__main__.py` 中实现 REPL 循环函数 `run_repl`。注意：`/plan` 和 `/cost` 命令直接调用 Agent 的真实方法（`toggle_plan_mode()`、`show_cost()`），而非打印占位符信息：
+在 `__main__.py` 中实现 REPL 循环函数 `run_repl`：
 
 ```python
 # __main__.py（续）
 
 
 async def run_repl(agent: Agent) -> None:
-    """交互式 REPL 循环：读取用户输入、分发命令、处理信号。"""
-
-    async def confirm_fn(message: str) -> bool:
-        """确认回调：Agent 在需要用户授权时暂停执行并等待终端输入 y/n。"""
-        try:
-            answer = input("  Allow? (y/n): ")
-            return answer.lower().startswith("y")
-        except EOFError:
-            return False
-
-    agent.set_confirm_fn(confirm_fn)
-
-    # ── SIGINT 信号处理器：区分"中断任务"与"退出程序" ──
-    sigint_count = 0  # 用于检测连续两次 Ctrl+C
-
-    def handle_sigint(sig, frame):
-        """SIGINT 信号处理器：区分"中断任务"与"退出程序"。"""
-        nonlocal sigint_count
-        if agent._aborted is False and agent.is_processing:
-            # Agent 正在执行任务，中断当前任务但不退出程序
-            agent.abort()
-            print("\n  (interrupted)")
-            sigint_count = 0
-            print_user_prompt()
-        else:
-            # Agent 空闲，连续两次 Ctrl+C 才退出程序（防止误触）
-            sigint_count += 1
-            if sigint_count >= 2:
-                print("\nBye!\n")
-                sys.exit(0)
-            print("\n  Press Ctrl+C again to exit.")
-            print_user_prompt()
-
-    # 注册 SIGINT 信号处理器（仅主线程有效）
-    signal.signal(signal.SIGINT, handle_sigint)
+    """交互式 REPL 循环：读取用户输入、分发命令。"""
     print_welcome()
 
     while True:
@@ -476,12 +508,10 @@ async def run_repl(agent: Agent) -> None:
         try:
             line = input()
         except (EOFError, KeyboardInterrupt):
-            # input() 阻塞期间的 Ctrl+C 会直接抛出 KeyboardInterrupt
             print("\nBye!\n")
             break
 
         inp = line.strip()
-        sigint_count = 0  # 有新输入时重置连续中断计数
 
         if not inp:
             continue
@@ -493,82 +523,19 @@ async def run_repl(agent: Agent) -> None:
         if inp == "/clear":
             agent.clear_history()
             continue
-        if inp == "/plan":
-            agent.toggle_plan_mode()  # 在 plan mode 和 normal mode 间切换
-            continue
-        if inp == "/cost":
-            agent.show_cost()  # 打印当前会话的 token 用量和预估费用
-            continue
-        if inp == "/compact":
-            try:
-                await agent.compact()  # 手动触发上下文压缩
-            except Exception as e:
-                print_error(str(e))
-            continue
-        if inp == "/memory":
-            from memory import list_memories
-            memories = list_memories()
-            if not memories:
-                print_info("No memories saved yet.")
-            else:
-                print_info(f"{len(memories)} memories:")
-                for m in memories:
-                    print(f"    [{m.type}] {m.name} — {m.description}")
-            continue
-        if inp == "/skills":
-            from skills import discover_skills
-            skills = discover_skills()
-            if not skills:
-                print_info("No skills found. Add skills to .claude/skills/<name>/SKILL.md")
-            else:
-                print_info(f"{len(skills)} skills:")
-                for s in skills:
-                    tag = f"/{s.name}" if s.user_invocable else s.name
-                    print(f"    {tag} ({s.source}) — {s.description}")
-            continue
-
-        # ── Skill 调用：/<skill-name> [args] ──
-        if inp.startswith("/"):
-            from skills import get_skill_by_name, resolve_skill_prompt, execute_skill
-            # 解析 skill 名称和参数（以第一个空格分隔）
-            space_idx = inp.find(" ")
-            cmd_name = inp[1:space_idx] if space_idx > 0 else inp[1:]
-            cmd_args = inp[space_idx + 1:] if space_idx > 0 else ""
-            skill = get_skill_by_name(cmd_name)
-            if skill and skill.user_invocable:
-                print_info(f"Invoking skill: {skill.name}")
-                try:
-                    if skill.context == "fork":
-                        # fork 类型的 skill：先执行 skill 脚本，再将结果注入对话
-                        result = execute_skill(skill.name, cmd_args)
-                        if result:
-                            await agent.chat(
-                                f'Use the skill tool to invoke "{skill.name}" '
-                                f'with args: {cmd_args or "(none)"}'
-                            )
-                    else:
-                        # 普通 skill：解析 prompt 模板后直接作为用户消息发送
-                        resolved = resolve_skill_prompt(skill, cmd_args)
-                        await agent.chat(resolved)
-                except Exception as e:
-                    if "abort" not in str(e).lower():
-                        print_error(str(e))
-                continue
 
         # ── 普通对话：将用户输入发送给 Agent ──
         try:
             await agent.chat(inp)
         except Exception as e:
-            # 过滤掉 abort 异常（用户主动中断时不显示错误）
-            if "abort" not in str(e).lower():
-                print_error(str(e))
+            print_error(str(e))
 ```
 
 #### 注意什么
 
-- `/plan` 命令直接调用 `agent.toggle_plan_mode()`，这会在 Agent 内部切换权限模式并更新系统提示词。第一次调用进入 plan mode，第二次调用恢复正常模式。`/cost` 命令调用 `agent.show_cost()`，它会计算并打印当前会话的 token 用量和预估费用。
-- `confirm_fn` 回调在 REPL 启动时注入给 Agent，使得 Agent 在需要用户确认（如执行危险 shell 命令）时，能暂停执行并等待用户在终端中输入 `y/n`。
-- `signal.signal` 只在主线程有效。因为 `input()` 是阻塞性 IO，而在 Windows 和 Unix 下 Python 对 `input()` 中断的处理稍有不同，通过捕获 `KeyboardInterrupt` 异常和信号拦截双重机制可以保证在任意系统下都能优雅退回命令行提示符。
+- `print_welcome()` 在 REPL 启动时打印欢迎横幅。
+- `EOFError` 和 `KeyboardInterrupt` 的双重捕获保证了在任意系统下都能优雅退出。
+- 更多 REPL 命令（`/cost`、`/compact`、`/plan` 等）将在后续课程中逐步添加。
 
 ---
 
@@ -613,13 +580,16 @@ async def run_repl(agent: Agent) -> None:
 ### 输入与执行
 
 1. 直接运行启动 REPL：
+
    ```bash
    python __main__.py
    ```
+
 2. 输入 `hello` 并按下回车，等待 Agent 回复。
 3. 输入命令 `/clear`，验证历史是否清空。
 4. 输入 `exit` 退出。
 5. 运行恢复会话命令：
+
    ```bash
    python __main__.py --resume
    ```

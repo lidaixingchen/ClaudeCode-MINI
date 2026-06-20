@@ -124,6 +124,37 @@ class MessageHistory:
         else:
             # Anthropic：所有 tool 结果合并为一条 role: "user" 消息，content 是 tool_result 块数组
             self.messages.append({"role": "user", "content": results})
+
+    def message_count(self) -> int:
+        """返回消息总数（不含系统提示词）"""
+        if self.use_openai:
+            # OpenAI 模式下减去首条系统消息
+            return len(self._openai_messages) - 1
+        return len(self._anthropic_messages)
+
+    def to_dict(self) -> dict[str, list[dict]]:
+        """将消息历史序列化为字典，用于会话持久化"""
+        return {
+            "anthropicMessages": self._anthropic_messages,
+            "openaiMessages": self._openai_messages,
+        }
+
+    def restore(self, data: dict[str, list[dict]]) -> None:
+        """从持久化数据恢复消息历史"""
+        if "anthropicMessages" in data and data["anthropicMessages"]:
+            self._anthropic_messages = data["anthropicMessages"]
+        if "openaiMessages" in data and data["openaiMessages"]:
+            self._openai_messages = data["openaiMessages"]
+
+    def clear(self, keep_system: bool = True) -> None:
+        """清空消息历史"""
+        self._anthropic_messages.clear()
+        if keep_system and self.use_openai:
+            # 保留系统提示词
+            self._openai_messages.clear()
+            self._openai_messages.append({"role": "system", "content": self.system_prompt})
+        else:
+            self._openai_messages.clear()
             
 def _to_openai_tools(tools: list[dict]) -> list[dict]:
     """将 Anthropic 格式的工具定义转换为 OpenAI 格式
@@ -159,14 +190,14 @@ class Agent:
         self.session_id = uuid.uuid4().hex[:8]
         # 记录会话启动时间（UTC），用于 --resume 时按时间排序
         self.session_start_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self._abort = False  # Ctrl+C 中断标志位
+        self._aborted = False  # Ctrl+C 中断标志位
 
         # 通过 BackendConfig 工厂方法创建客户端——一行搞定
         self._client = backend.create_client()
 
     def abort(self) -> None:
         """设置中断标志，供信号处理器调用以终止当前任务。"""
-        self._abort = True
+        self._aborted = True
 
     async def chat(self, user_message: str) -> None:
         """封装公共的对外对话方法，提供自动保存和异常隔离。"""
@@ -179,11 +210,11 @@ class Agent:
 
     def _auto_save(self) -> None:
         """自动保存当前会话到磁盘，供 --resume 恢复使用"""
-        try:            
+        try:
             save_session(self.session_id, {
                 "metadata": {
                     "id": self.session_id,
-                    "model": self.config.model,
+                    "model": self.backend.model,
                     "cwd": str(Path.cwd()),
                     "startTime": self.session_start_time,
                     "messageCount": self.history.message_count(),
@@ -193,6 +224,16 @@ class Agent:
         except Exception:
             # 保存失败不应影响用户体验，静默忽略
             pass
+
+    def restore_session(self, data: dict) -> None:
+        """从持久化的会话数据中恢复消息历史。"""
+        self.history.restore(data)
+        print(f"  [cyan]ℹ Session restored ({self.history.message_count()} messages).[/cyan]")
+
+    def clear_history(self) -> None:
+        """清空对话历史，保留系统提示词。"""
+        self.history.clear(keep_system=True)
+        print("  [cyan]ℹ Conversation history cleared.[/cyan]")
 
     async def _chat(self, user_message: str) -> None:
         """统一入口：根据后端配置自动分发到对应的聊天循环"""
