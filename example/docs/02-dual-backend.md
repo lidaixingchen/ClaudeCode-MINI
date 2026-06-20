@@ -733,6 +733,9 @@ Mini Claude Code 已启动！输入 'exit' 退出。
 2. **如果在单轮循环中模型决定同时调用 3 个工具，OpenAI 协议的历史中会增加多少条消息？**
    *(提示：1 条带 3 个 tool_calls 的 assistant 消息 + 3 条单独 the tool 消息 = 共 4 条消息。)*
 
+3. **为什么需要 `MessageHistory` 抽象层？直接在 Agent 中维护 `_anthropic_messages` 和 `_openai_messages` 两个数组不行吗？**
+   *(提示：抽象层封装了两种协议的差异（如 `append_tool_results` 的实现不同），让 Agent 的业务逻辑（`_chat_anthropic`、`_chat_openai`）不用关心底层协议细节。如果直接操作数组，每次修改协议逻辑都要改动两处代码，容易遗漏导致 Bug。)*
+
 ---
 
 ## 📦 本节收获
