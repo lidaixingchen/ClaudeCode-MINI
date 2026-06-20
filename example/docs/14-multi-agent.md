@@ -450,6 +450,9 @@ Token 消耗要使用增量计算（`self.state.total_input_tokens - prev_in`）
 
 2. **为什么在 `subagent.py` 的 `get_sub_agent_config` 函数中，我们从 `general` 代理的可用工具集中特意排除了 `agent` 工具？如果不排除，可能会发生什么？**
 
+3. **为什么子代理要有三种类型（explore、plan、general），而不是统一用 general 类型？**
+   *(提示：不同任务需要不同的"能力边界"。explore 类型只有只读工具，适合安全地搜索和分析代码，不会意外修改文件；plan 类型也是只读的，专注于结构化规划；general 类型拥有完整工具集，适合需要实际执行的任务。限制工具集是一种"最小权限原则"——给子代理刚好够用的权限，降低误操作风险。)*
+
 ---
 
 ## 📦 本节收获

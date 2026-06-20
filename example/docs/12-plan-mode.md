@@ -505,6 +505,9 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
 
 2. **如果用户在使用 `4. Keep Planning` 时给出了极长、极复杂的改动反馈，大模型在再次进入规划阶段时，会不会面临上下文溢出？该如何防范？**
 
+3. **为什么 Plan Mode 通过动态切换 `permission_mode` 实现，而不是为规划阶段写一套独立的代码路径？**
+   *(提示：复用现有的工具执行流水线（`execute_tool`、`check_permission`）只需要在权限层拦截写操作，代码量极少且不影响其他功能。如果写独立路径，每次新增工具都要同步维护两套逻辑，维护成本翻倍。这是"策略模式"的经典应用——用配置驱动行为，而非代码分支。)*
+
 ## 📦 本节收获
 
 * **只读安全沙箱**：学会了如何通过动态切换权限模式，在底层拦截写操作和危险 Shell 执行。
