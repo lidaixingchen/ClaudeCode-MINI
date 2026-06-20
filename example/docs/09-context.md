@@ -68,6 +68,19 @@ SNIP_THRESHOLD = 0.60  # 利用率超过 60% 时触发 Tier 2 压缩
 MICROCOMPACT_IDLE_S = 5 * 60  # 空闲 5 分钟后触发 Tier 3 清理（300 秒）
 KEEP_RECENT_RESULTS = 3  # 保留最近 3 个工具结果不被裁剪（防止删除有用上下文）
 
+@dataclass
+class AgentState:
+    """Agent 的运行时状态"""
+    # 保留第 6 课的字段
+    thinking_mode: Literal["disabled", "adaptive", "enabled"] = "disabled"
+    # 保留第 8 课的字段
+    confirmed_paths: set[str] = field(default_factory=set)
+    current_task: asyncio.Task | None = None
+    # 第 9 课新增的字段
+    last_input_token_count: int = 0  # 最近一次 API 返回的输入 Token 数
+    last_api_call_time: float | None = None  # 最近一次 API 调用的时间戳
+
+
 class Agent:
     # ... 在 __init__ 中计算并保存有效窗口边界：
     # self.effective_window = _get_context_window(model) - CONTEXT_WINDOW_SAFETY_MARGIN
@@ -131,7 +144,7 @@ class Agent:
 
         # 2. 向上游 API 请求总结（排除最后一条用户消息，避免重复）
         response = await self._client.messages.create(
-            model=self.config.model,
+            model=self.backend.model,
             max_tokens=2048,  # 摘要输出通常不需要太多 token
             system="You are a conversation summarizer. Be concise but preserve important details.",
             messages=[
@@ -177,7 +190,7 @@ class Agent:
 
         # 2. 向上游 OpenAI API 发送总结请求（排除 system 和最后一条 user）
         response = await self._client.chat.completions.create(
-            model=self.config.model,
+            model=self.backend.model,
             messages=[
                 {"role": "system", "content": "You are a conversation summarizer. Be concise but preserve important details."},
                 *messages[1:-1],  # 排除首位的 system 和末位的最新 user 消息
@@ -454,18 +467,19 @@ class Agent:
         # 必须在此处检查，因为队列末尾是干净的 user 消息，不会破坏 tool_use/tool_result 配对
         await self._check_and_compact()
 
-        # 3. 启动异步记忆预取（后续步骤会实现）
-        memory_prefetch = self._start_memory_prefetch(user_message)
+        # 3. 启动异步记忆预取（第 10 课实现）
+        # 注：第 10 课会实现 _start_memory_prefetch 方法
+        # memory_prefetch = self._start_memory_prefetch(user_message)
 
         # 4. 进入工具循环
         while True:
-            if self.state.aborted:
+            if self._aborted:
                 break
 
-            # 每次迭代前更新系统提示词并执行三级压缩流水线
-            self._update_system_prompt()  # 确保系统提示词包含最新记忆和工具列表
+            # 每次迭代前执行三级压缩流水线
             self._run_compression_pipeline()  # Tier 1/2/3 本地压缩，开销极低
-            self._consume_memory_prefetch(memory_prefetch)
+            # 注：第 10 课会实现 _consume_memory_prefetch 方法
+            # self._consume_memory_prefetch(memory_prefetch)
 
             # ... 调用 API 并处理响应 ...
 
@@ -490,18 +504,19 @@ class Agent:
         # 2. 在轮次边界（Turn Boundary）检查是否需要自动压缩
         await self._check_and_compact()
 
-        # 3. 启动异步记忆预取（后续步骤会实现）
-        memory_prefetch = self._start_memory_prefetch(user_message)
+        # 3. 启动异步记忆预取（第 10 课实现）
+        # 注：第 10 课会实现 _start_memory_prefetch 方法
+        # memory_prefetch = self._start_memory_prefetch(user_message)
 
         # 4. 进入工具循环
         while True:
-            if self.state.aborted:
+            if self._aborted:
                 break
 
-            # 每次迭代前更新系统提示词并执行三级压缩流水线
-            self._update_system_prompt()
+            # 每次迭代前执行三级压缩流水线
             self._run_compression_pipeline()  # Tier 1/2/3 本地压缩
-            self._consume_memory_prefetch(memory_prefetch)
+            # 注：第 10 课会实现 _consume_memory_prefetch 方法
+            # self._consume_memory_prefetch(memory_prefetch)
 
             # ... 调用 API 并处理响应 ...
 

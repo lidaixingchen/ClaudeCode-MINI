@@ -9,7 +9,7 @@ from anthropic.types.tool_param import ToolParam
 import openai
 import anthropic
 
-from tools import execute_tool, get_tool_definitions
+from tools import get_tool_definitions, execute_tool, CONCURRENCY_SAFE_TOOLS, get_active_tool_definitions,
 from prompt import build_system_prompt
 
 import uuid
@@ -21,6 +21,17 @@ from dotenv import load_dotenv
 
 #加载环境变量
 load_dotenv()
+
+def _get_max_output_tokens(model: str) -> int:
+    """根据模型名称动态返回最大输出 token 数，避免硬编码。"""
+    m = model.lower()
+    if "opus-4-6" in m:
+        return 64000   # opus-4-6 拥有最大的输出能力
+    if "sonnet-4-6" in m:
+        return 32000
+    if any(x in m for x in ("opus-4", "sonnet-4", "haiku-4")):
+        return 32000
+    return 16384  # 未知模型使用保守默认值
 
 @dataclass
 class BackendConfig:
@@ -72,7 +83,7 @@ class AgentConfig:
 @dataclass
 class AgentState:
     """Agent 的运行时状态"""
-    pass
+    thinking_mode: Literal["disabled", "adaptive", "enabled"] = "disabled"
 
 class MessageHistory:
     """统一 Anthropic/OpenAI 消息格式的抽象层"""
@@ -362,4 +373,16 @@ class Agent:
         # 输出最终回复
         if message.content:
             print(message.content)
+
+    async def _call_anthropic_stream(self, on_tool_block_complete=None) -> Any:
+        """流式调用 Anthropic API，监听 tool_use 块并在完成时触发回调。"""
+        max_output = _get_max_output_tokens(self.backend.model)
+        create_params = {
+            "model": self.backend.model,
+            # thinking 模式下使用动态上限，禁用时使用默认 16384
+            "max_tokens": max_output if self.state.thinking_mode != "disabled" else 16384,
+            "system": self._system_prompt,
+            "tools": get_active_tool_definitions(self.tools),
+            "messages": self.history.anthropic_messages,
+        }
         

@@ -351,8 +351,8 @@ async def _chat_anthropic(self, user_message: str) -> None:
         # 动态编译最新的系统提示词
         current_system_prompt = build_system_prompt()
 
-        response = await self._anthropic_client.messages.create(
-            model=self.config.model,
+        response = await self._client.messages.create(
+            model=self.backend.model,
             max_tokens=4096,
             system=current_system_prompt,  # 传入编译后的提示词
             tools=get_tool_definitions(),
@@ -370,8 +370,8 @@ async def _chat_openai(self, user_message: str) -> None:
         current_system_prompt = build_system_prompt()
         self.history.update_system_prompt(current_system_prompt)
 
-        response = await self._openai_client.chat.completions.create(
-            model=self.config.model,
+        response = await self._client.chat.completions.create(
+            model=self.backend.model,
             messages=self.history.openai_messages,  # 统一由 history 管理
             tools=_to_openai_tools(get_tool_definitions()),
         )

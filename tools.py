@@ -7,6 +7,10 @@ from pathlib import Path
 
 MAX_RESULT_CHARS = 50000  # 限制单次工具返回最大字符数——防止撑爆上下文窗口
 
+# 并发安全工具白名单：只读、无副作用，允许在流式输出期间异步抢跑
+# 使用 set 实现 O(1) 查找，避免在回调中频繁遍历列表
+CONCURRENCY_SAFE_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch"}
+
 # 工具定义：告诉 LLM 有哪些工具可用
 tool_definitions: list[dict] = [
     {

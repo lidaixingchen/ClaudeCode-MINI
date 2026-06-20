@@ -225,10 +225,15 @@ def build_agent_descriptions() -> str:
 ```python
 # agent.py
 
+import logging
+from ui import print_sub_agent_start, print_sub_agent_end
+
+logger = logging.getLogger(__name__)
+
     def __init__(
         self,
         *,
-        permission_mode: PermissionMode = "default",
+        permission_mode: str = "default",
         model: str = "claude-opus-4-6",
         api_base: str | None = None,
         anthropic_base_url: str | None = None,
@@ -236,10 +241,10 @@ def build_agent_descriptions() -> str:
         thinking: bool = False,
         max_cost_usd: float | None = None,
         max_turns: int | None = None,
-        confirm_fn: Callable[[str], Awaitable[bool]] | None = None,
+        confirm_fn = None,
         custom_system_prompt: str | None = None,   # 子代理自定义系统提示词
-        custom_tools: list[ToolDef] | None = None,  # 子代理裁剪后的工具集
-        is_sub_agent: bool = False,                  # 标识是否为子代理（影响输出捕获与 MCP 初始化）
+        custom_tools: list[dict] | None = None,    # 子代理裁剪后的工具集
+        is_sub_agent: bool = False,                # 标识是否为子代理（影响输出捕获与 MCP 初始化）
     ):
         # 封装至统一的 AgentConfig 中
         self.config = AgentConfig(
@@ -352,7 +357,7 @@ Token 消耗要使用增量计算（`self.state.total_input_tokens - prev_in`）
 
         config = get_sub_agent_config(agent_type)
         sub_agent = Agent(
-            model=self.config.model,
+            model=self.backend.model,
             # 继承父 Agent 的 API 后端地址（如 aihubmix 中转），否则子代理会路由到默认 Anthropic 端点
             api_base=str(self.backend.base_url) if self.use_openai else None,
             anthropic_base_url=str(self.backend.base_url) if not self.use_openai else None,

@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from frontmatter import parse_frontmatter
+from .frontmatter import parse_frontmatter
 
 # ─── Types ──────────────────────────────────────────────────
 

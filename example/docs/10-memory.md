@@ -765,7 +765,7 @@ class Agent:
         “””
         if not self.use_openai:
             client = self._client
-            model = self.config.model
+            model = self.backend.model
 
             async def _sq(system: str, user_message: str) -> str:
                 # max_tokens=256 限制输出长度，语义召回只需返回简短的 JSON 对象
@@ -778,7 +778,7 @@ class Agent:
             return _sq
         if self.use_openai:
             client = self._client
-            model = self.config.model
+            model = self.backend.model
 
             async def _sq_oai(system: str, user_message: str) -> str:
                 resp = await client.chat.completions.create(
@@ -793,6 +793,84 @@ class Agent:
             return _sq_oai
         # 未配置任何 API 客户端时返回 None，调用方需检查后跳过语义召回
         return None
+
+    # ─── Memory prefetch integration ─────────────────────────
+
+    # 在 AgentState 中添加记忆相关字段
+    @dataclass
+    class AgentState:
+        """Agent 的运行时状态"""
+        # ... 保留之前课程的字段 ...
+        # 第 10 课新增的字段
+        already_surfaced_memories: set[str] = field(default_factory=set)  # 已注入的记忆文件名集合
+        session_memory_bytes: int = 0  # 当前会话已注入的记忆总字节数
+
+    def _start_memory_prefetch(self, user_message: str) -> MemoryPrefetch | None:
+        """启动异步记忆预取，返回可轮询结果的句柄。
+
+        在用户输入时提前异步启动记忆召回，当模型真正需要使用记忆时，结果已准备好。
+        """
+        side_query = self._build_side_query()
+        if not side_query:
+            return None
+        return start_memory_prefetch(
+            user_message,
+            side_query,
+            self.state.already_surfaced_memories,
+            self.state.session_memory_bytes,
+        )
+
+    async def _consume_memory_prefetch(self, prefetch: MemoryPrefetch | None) -> None:
+        """消费记忆预取结果，将召回的记忆注入到 System Prompt 中。
+
+        如果预取任务已完成且未被消费，则将结果注入到上下文中。
+        """
+        if not prefetch or prefetch.consumed or not prefetch.settled:
+            return
+        prefetch.consumed = True
+        try:
+            memories = await prefetch.task
+            if memories:
+                # 将召回的记忆格式化并注入到 System Prompt
+                memory_section = format_memories_for_injection(memories)
+                self._system_prompt += "\n\n" + memory_section
+                self.history.update_system_prompt(self._system_prompt)
+                # 更新已注入的记忆集合，避免重复注入
+                for m in memories:
+                    self.state.already_surfaced_memories.add(m.filename)
+        except Exception as e:
+            # 预取失败不应影响主流程，静默忽略
+            pass
+```
+
+最后，需要更新 `_chat_anthropic` 和 `_chat_openai` 主循环，启用记忆预取：
+
+```python
+# agent.py -> _chat_anthropic 和 _chat_openai 的修改
+
+    async def _chat_anthropic(self, user_message: str) -> None:
+        """Anthropic 后端的主对话循环。"""
+        # 1. 用户消息推入历史
+        self.history.append_user_message(user_message)
+
+        # 2. 在轮次边界检查是否需要自动压缩
+        await self._check_and_compact()
+
+        # 3. 启动异步记忆预取（第 10 课新增）
+        memory_prefetch = self._start_memory_prefetch(user_message)
+
+        # 4. 进入工具循环
+        while True:
+            if self._aborted:
+                break
+
+            # 每次迭代前执行三级压缩流水线
+            self._run_compression_pipeline()
+
+            # 消费记忆预取结果（第 10 课新增）
+            await self._consume_memory_prefetch(memory_prefetch)
+
+            # ... 调用 API 并处理响应 ...
 ```
 
 #### 注意什么

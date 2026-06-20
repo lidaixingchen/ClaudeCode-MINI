@@ -24,6 +24,42 @@ def print_info(msg: str) -> None:
     """打印提示信息（青色，用于状态通知）。"""
     console.print(f"\n  [cyan]ℹ {msg}[/cyan]")
 
+def print_tool_call(name: str, args: dict) -> None:
+    """打印工具调用信息（黄色，显示工具名和参数摘要）。"""
+    # 只显示前 3 个参数，避免输出过长
+    args_preview = {k: v for i, (k, v) in enumerate(args.items()) if i < 3}
+    args_str = ", ".join(f"{k}={repr(v)[:50]}" for k, v in args_preview.items())
+    if len(args) > 3:
+        args_str += ", ..."
+    console.print(f"\n  [yellow]🔧 {name}[/yellow] [dim]({args_str})[/dim]")
+
+
+def print_tool_result(name: str, result: str) -> None:
+    """打印工具执行结果（灰色，截断过长内容）。"""
+    # 截断显示，避免刷屏
+    preview = result[:200] + "..." if len(result) > 200 else result
+    console.print(f"  [dim]{preview}[/dim]")
+
+
+def print_assistant_text(text: str) -> None:
+    """打印助手回复文本（普通颜色，支持流式追加）。"""
+    console.print(text, end="")
+
+
+def print_retry(attempt: int, max_retries: int, reason: str) -> None:
+    """打印重试信息（黄色，显示重试次数和原因）。"""
+    console.print(f"\n  [yellow]↻ Retry {attempt}/{max_retries}: {reason}[/yellow]")
+
+
+def print_sub_agent_start(agent_type: str, description: str) -> None:
+    """打印子代理启动信息（紫色边框）。"""
+    console.print(f"\n  [magenta]┌─ Sub-agent [{agent_type}]: {description}[/magenta]")
+
+
+def print_sub_agent_end(agent_type: str, description: str) -> None:
+    """打印子代理结束信息（紫色边框）。"""
+    console.print(f"  [magenta]└─ Sub-agent [{agent_type}] completed[/magenta]")
+
 # Spinner 动画帧序列（Braille 字符）
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 

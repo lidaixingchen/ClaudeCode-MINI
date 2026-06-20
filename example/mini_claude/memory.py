@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from frontmatter import parse_frontmatter, format_frontmatter
+from .frontmatter import parse_frontmatter, format_frontmatter
 
 logger = logging.getLogger(__name__)
 

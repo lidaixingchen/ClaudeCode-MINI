@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from memory import get_memory_dir
-from frontmatter import parse_frontmatter
+from .memory import get_memory_dir
+from .frontmatter import parse_frontmatter
 
 # ─── Logger ─────────────────────────────────────────────────
 

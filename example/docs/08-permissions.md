@@ -393,14 +393,26 @@ from tools import check_permission  # 导入权限检查引擎
 @dataclass
 class AgentState:
     """Agent 的运行时状态"""
+    # 保留第 6 课的字段
+    thinking_mode: Literal["disabled", "adaptive", "enabled"] = "disabled"
+    # 第 8 课新增的字段
     confirmed_paths: set[str] = field(default_factory=set)  # 已确认的路径白名单
     current_task: asyncio.Task | None = None  # 当前正在执行的任务
 
 
+@dataclass
+class AgentConfig:
+    """Agent 行为配置（不含后端信息）"""
+    permission_mode: str = "default"  # 权限模式：default, plan, acceptEdits, bypassPermissions, dontAsk
+
+
 class Agent:
-    # ... 已经在 AgentConfig 中增加了 permission_mode
-    # ... 在 __init__ 中初始化：
-    #     self.confirm_fn = None  # 确认回调函数，由 REPL 注入
+    def __init__(self, backend: BackendConfig, permission_mode: str = "default"):
+        self.backend = backend
+        self.config = AgentConfig(permission_mode=permission_mode)
+        self.state = AgentState()
+        # ... 其他初始化代码 ...
+        self.confirm_fn = None  # 确认回调函数，由 REPL 注入
 
     @property
     def is_processing(self) -> bool:
@@ -463,6 +475,25 @@ class Agent:
 
                 # 【2. 常规工具执行】
                 # 此处省略原有执行工具与 early_task 判断，直接调用 execute_tool ...
+```
+
+同时，需要更新第 6 课中 `_on_tool_block_complete` 回调，添加权限检查：
+
+```python
+# agent.py -> _chat_anthropic 中的 _on_tool_block_complete 回调
+
+            def _on_tool_block_complete(block: dict):
+                # 只有白名单中的只读工具才允许抢跑
+                if block["name"] in CONCURRENCY_SAFE_TOOLS:
+                    # 权限检查：即使工具在白名单中，仍需验证用户是否授权
+                    perm = check_permission(
+                        block["name"], block["input"],
+                        self.config.permission_mode, self.state.plan_file_path,
+                    )
+                    if perm["action"] == "allow":
+                        # 创建后台异步任务立即开始执行，不阻塞流式接收
+                        task = asyncio.create_task(self._execute_tool_call(block["name"], block["input"]))
+                        early_executions[block["id"]] = task
 ```
 
 最后，在 `__main__.py` 的 REPL 中注入确认回调：

@@ -13,12 +13,12 @@ from dotenv import load_dotenv
 # 加载 .env 文件中的环境变量（如 ANTHROPIC_API_KEY）
 load_dotenv()
 
-from agent import Agent, BackendConfig
-from tools import PermissionMode
-from ui import print_welcome, print_user_prompt, print_error, print_info, print_plan_for_approval, print_plan_approval_options
-from session import load_session, get_latest_session_id
-from memory import list_memories
-from skills import discover_skills, resolve_skill_prompt, get_skill_by_name, execute_skill
+from .agent import Agent, BackendConfig
+from .tools import PermissionMode
+from .ui import print_welcome, print_user_prompt, print_error, print_info, print_plan_for_approval, print_plan_approval_options
+from .session import load_session, get_latest_session_id
+from .memory import list_memories
+from .skills import discover_skills, resolve_skill_prompt, get_skill_by_name, execute_skill
 
 
 def parse_args() -> argparse.Namespace:

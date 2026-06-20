@@ -4,6 +4,16 @@
 
 为 Agent 构建流畅的流式字符输出界面和稳健的 API 网络容错机制。实现 Anthropic 与 OpenAI 两套后端的文本流渲染（逐字显示回复），滤除大模型的 Extended Thinking 冗余 Token 以节省上下文，并为 API 请求注入带随机抖动的“指数退避”重试保护。
 
+> **💡 本课与第 06 课的关系**
+>
+> - **第 06 课**（Anthropic 专属）：利用 Anthropic 流式 API 的 `content_block_stop` 事件实现**实时抢跑**——工具参数一生成完就开始执行
+> - **第 07 课**（双后端）：实现文本流式输出和 OpenAI 流式工具调用的**增量拼装**
+>
+> 两课的核心区别在于 API 协议设计不同：
+>
+> - **Anthropic**：有明确的”块结束”信号，支持实时抢跑
+> - **OpenAI**：工具参数通过多个 delta 片段累加，需要流结束后才能组装完整调用，使用 `asyncio.gather` 并行执行
+
 ---
 
 ## 🏆 最终效果
@@ -131,8 +141,8 @@ from ui import print_assistant_text, stop_spinner  # UI 库封装了 sys.stdout.
 class Agent:
     # ... 在 __init__ 中定义 self._output_buffer: list[str] | None = None
 
-    # 流式文本输出：区分主代理直接打印 vs 子代理缓冲收集
     def _emit_text(self, text: str) -> None:
+        """流式文本输出：区分主代理直接打印 vs 子代理缓冲收集。"""
         # 子代理运行时缓冲输出，避免干扰主终端显示
         if self._output_buffer is not None:
             self._output_buffer.append(text)
@@ -164,16 +174,16 @@ Anthropic API 的流式响应会混杂输出 `text` 块和 `thinking` 块。
 ```python
 # agent.py（续）
 
-    # Anthropic 后端流式调用：处理 SSE 事件流，实时渲染文本并过滤思考链
     async def _call_anthropic_stream(self, on_tool_block_complete=None) -> Any:
+        """Anthropic 后端流式调用：处理 SSE 事件流，实时渲染文本并过滤思考链。"""
         async def _do():
-            max_output = _get_max_output_tokens(self.config.model)
+            max_output = _get_max_output_tokens(self.backend.model)
             create_params: dict[str, Any] = {
-                "model": self.config.model,
+                "model": self.backend.model,
                 # thinking 模式下需要更大输出空间，禁用时回退到默认值
                 "max_tokens": max_output if self.state.thinking_mode != "disabled" else 16384,
                 "system": self._system_prompt,
-                "tools": get_active_tool_definitions(self.tools),
+                "tools": get_tool_definitions(),
                 "messages": self.history.anthropic_messages,
             }
 
@@ -249,7 +259,7 @@ Anthropic API 的流式响应会混杂输出 `text` 块和 `thinking` 块。
 #### 注意什么
 
 - **思考链与打字机 Spinner**：在 Anthropic 流式读取时，模型可能会先返回 `thinking` 类型的数据块进行思考。为了保证用户体验，我们必须在收到首个有效字符（无论是普通文本还是思考文本）时立即调用 `stop_spinner()` 来停止加载动画。
-- **工具定义获取**：在实际 codebase 中，请使用 `get_active_tool_definitions(self.tools)` 动态获取当前激活的工具，以支持后续多 Agent 沙箱的限制工具列表。
+- **工具定义获取**：使用 `get_tool_definitions()` 获取工具定义列表。第 12 课引入延迟工具后，会改用 `get_active_tool_definitions()` 过滤未激活的延迟工具。
 ```
 
 ---
@@ -275,9 +285,9 @@ async def _call_openai_stream(self) -> dict:
     async def _do():
         # 启动 OpenAI 兼容端流式生成（include_usage 让最后一个 chunk 携带 token 统计）
         stream = await self._client.chat.completions.create(
-            model=self.config.model,
+            model=self.backend.model,
             messages=self.history.openai_messages,
-            tools=_to_openai_tools(get_active_tool_definitions(self.tools)),
+            tools=_to_openai_tools(get_tool_definitions()),
             stream=True,
             stream_options={"include_usage": True},  # 要求返回 token 用量统计
         )
@@ -489,7 +499,7 @@ delay = 1.0 * (2 ** attempt)
 
 1. **终端加载动画（Spinner）无法停止**：检查在解析 `content_block_delta` 事件时，是否遗漏了在首个 `text` 或 `thinking` 块到达时调用 `stop_spinner()`。
 2. **OpenAI 模式下提示 `400 Bad Request`**：检查在流式结束后向 `MessageHistory` 回填 assistant 消息时，是否错误地将已经拼接包装好的 `choice.message` 字典又做了一次冗余的 `role` 和 `content` 包装。
-3. **未定义的函数报错**：确保 `tools.py` 导出的方法名称在 `agent.py` 顶部的 import 列表中拼写正确（使用 `get_active_tool_definitions` 而不是 `get_tool_definitions`）。
+3. **未定义的函数报错**：确保 `tools.py` 导出的方法名称在 `agent.py` 顶部的 import 列表中拼写正确（使用 `get_tool_definitions`）。
 
 ---
 
