@@ -233,6 +233,8 @@ Agent 常运行测试或构建任务。我们需要：
 ```python
 # tools.py（续）
 
+import subprocess
+
 
 def _run_shell(inp: dict) -> str:
     """执行 Shell 命令，合并 stdout 和 stderr，支持超时保护"""

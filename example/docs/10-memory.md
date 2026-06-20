@@ -47,7 +47,7 @@
 
 #### 为什么做
 
-如果用户在本地开发多个不同的项目，我们决不能让 A 项目的上下文记忆混入 B 项目中。我们需要通过计算当前工作目录（CWD）的 SHA-256 散列值，将记忆文件夹物理隔离存放在全局主目录下的 `.mini-claude/projects/{hash}/memory` 中。
+如果用户在本地开发多个不同的项目，我们决不能让 A 项目的上下文记忆混入 B 项目中。我们需要通过计算当前工作目录（CWD）的 SHA-256 散列值，将记忆文件夹物理隔离存放在当前工作目录下的 `.mini-claude/projects/{hash}/memory` 中。
 
 #### 做什么
 
@@ -92,7 +92,7 @@ def _project_hash() -> str:
 
 def get_memory_dir() -> Path:
     """获取当前项目的记忆存储目录，不存在时自动创建。"""
-    d = Path.home() / ".mini-claude" / "projects" / _project_hash() / "memory"
+    d = Path.cwd() / ".mini-claude" / "projects" / _project_hash() / "memory"
     d.mkdir(parents=True, exist_ok=True)
     return d
 ```
@@ -763,8 +763,8 @@ class Agent:
         通过闭包捕获对应的客户端实例，返回签名统一的异步函数，
         调用方无需关心底层使用的是 Anthropic 还是 OpenAI API。
         “””
-        if self._anthropic_client:
-            client = self._anthropic_client
+        if not self.use_openai:
+            client = self._client
             model = self.config.model
 
             async def _sq(system: str, user_message: str) -> str:
@@ -776,8 +776,8 @@ class Agent:
                 # Anthropic 后端需要从 content 中筛选 type == “text” 的块并拼接
                 return “”.join(b.text for b in resp.content if b.type == “text”)
             return _sq
-        if self._openai_client:
-            client = self._openai_client
+        if self.use_openai:
+            client = self._client
             model = self.config.model
 
             async def _sq_oai(system: str, user_message: str) -> str:
@@ -837,7 +837,7 @@ for f in d.glob("*.md"):
 
 ### 2. 记忆没有按照项目做沙箱隔离
 
-如果简单把所有项目的记忆混着存在全局 `~/.mini-claude/memory/` 目录下，一旦大模型在前端项目 A 下检索到后端项目 B 的命名规范或文件规则，就会产生严重的牛头不对马嘴的逻辑干扰。
+如果简单把所有项目的记忆混着存在全局 `./.mini-claude/memory/` 目录下，一旦大模型在前端项目 A 下检索到后端项目 B 的命名规范或文件规则，就会产生严重的牛头不对马嘴的逻辑干扰。
 
 **修正**：必须在路径中引入当前工作目录的 hash 值进行强物理隔离。
 

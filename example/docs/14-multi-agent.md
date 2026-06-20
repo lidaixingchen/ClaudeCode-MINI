@@ -100,8 +100,8 @@ IMPORTANT CONSTRAINTS:
 
 GENERAL_PROMPT = """You are an agent for Mini Claude Code. Given the user's message, you should use the tools available to complete the task."""
 
-# 扫描并加载本地/项目级自定义代理配置（从 ~/.claude/agents/ 和 .cwd()/.claude/agents/ 读取 Markdown）
 def _discover_custom_agents() -> dict[str, dict]:
+    """扫描并加载本地/项目级自定义代理配置（从 ~/.claude/agents/ 和 .cwd()/.claude/agents/ 读取 Markdown）。"""
     # 扫描 ~/.claude/agents/ 和 .cwd()/.claude/agents/ 目录下的 Markdown
     # 复用 frontmatter 解析器并返回代理配置字典
     # ...
@@ -354,8 +354,8 @@ Token 消耗要使用增量计算（`self.state.total_input_tokens - prev_in`）
         sub_agent = Agent(
             model=self.config.model,
             # 继承父 Agent 的 API 后端地址（如 aihubmix 中转），否则子代理会路由到默认 Anthropic 端点
-            api_base=str(self._openai_client.base_url) if self.use_openai and self._openai_client else None,
-            anthropic_base_url=str(self._anthropic_client.base_url) if not self.use_openai and self._anthropic_client else None,
+            api_base=str(self.backend.base_url) if self.use_openai else None,
+            anthropic_base_url=str(self.backend.base_url) if not self.use_openai else None,
             custom_system_prompt=config["system_prompt"],
             custom_tools=config["tools"],
             is_sub_agent=True,
@@ -418,7 +418,7 @@ Token 消耗要使用增量计算（`self.state.total_input_tokens - prev_in`）
 
 ### 2. 子代理未继承 `api_base`
 * **陷阱**：如果学员在实现子代理实例化时，遗漏了 `api_base` 的透传，当用户通过中转节点（如 `aihubmix.com`）使用自定义 OpenAI 后端运行 `mini-claude` 时，子代理在后台会被直接路由至官方向外请求，导致服务阻断。
-* **解决方案**：实例化时务必增加以下继承：`api_base=str(self._openai_client.base_url) if self.use_openai else None`。
+* **解决方案**：实例化时务必增加以下继承：`api_base=str(self.backend.base_url) if self.use_openai else None`。
 
 ---
 

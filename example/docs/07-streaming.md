@@ -72,8 +72,8 @@ if message.content:
 # agent.py 中的修改
 
 
-# 判断模型是否支持 Extended Thinking（思考链）功能
 def _model_supports_thinking(model: str) -> bool:
+    """判断模型是否支持 Extended Thinking（思考链）功能。"""
     m = model.lower()
     # Claude 3 系列不支持 thinking，只有更新的 4 系列才支持
     if "claude-3-" in m or "3-5-" in m or "3-7-" in m:
@@ -83,15 +83,15 @@ def _model_supports_thinking(model: str) -> bool:
     return False
 
 
-# 判断模型是否支持自适应思考模式（可动态调整思考深度）
 def _model_supports_adaptive_thinking(model: str) -> bool:
+    """判断模型是否支持自适应思考模式（可动态调整思考深度）。"""
     m = model.lower()
     # 仅 opus-4-6 和 sonnet-4-6 支持自适应思考
     return "opus-4-6" in m or "sonnet-4-6" in m
 
 
-# 根据模型版本返回最大输出 Token 数，避免超出上下文窗口限制
 def _get_max_output_tokens(model: str) -> int:
+    """根据模型版本返回最大输出 Token 数，避免超出上下文窗口限制。"""
     m = model.lower()
     if "opus-4-6" in m:
         return 64000  # 最新旗舰模型有更大输出空间
@@ -186,7 +186,7 @@ Anthropic API 的流式响应会混杂输出 `text` 块和 `thinking` 块。
             first_text = True  # 标记是否为首个有效文本，用于控制 spinner 停止时机
 
             # 启动 API 监听流
-            async with self._anthropic_client.messages.stream(**create_params) as stream:
+            async with self._client.messages.stream(**create_params) as stream:
                 async for event in stream:
                     if not hasattr(event, 'type'):
                         continue
@@ -270,11 +270,11 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
 # agent.py（续）
 
 
-# OpenAI 后端流式调用：处理增量分片并实时渲染文本
 async def _call_openai_stream(self) -> dict:
+    """OpenAI 后端流式调用：处理增量分片并实时渲染文本。"""
     async def _do():
         # 启动 OpenAI 兼容端流式生成（include_usage 让最后一个 chunk 携带 token 统计）
-        stream = await self._openai_client.chat.completions.create(
+        stream = await self._client.chat.completions.create(
             model=self.config.model,
             messages=self.history.openai_messages,
             tools=_to_openai_tools(get_active_tool_definitions(self.tools)),
@@ -393,8 +393,8 @@ import time
 from ui import print_retry  # 导入重试渲染函数
 
 
-# 判断错误是否可重试（瞬时网络故障 vs 永久性配置错误）
 def _is_retryable(error: Exception) -> bool:
+    """判断错误是否可重试（瞬时网络故障 vs 永久性配置错误）。"""
     # 提取错误状态码（兼容不同 SDK 的属性命名）
     status = getattr(error, "status_code", None) or getattr(error, "status", None)
     # 429: 限流, 503: 服务不可用, 529: Anthropic 过载
@@ -407,8 +407,8 @@ def _is_retryable(error: Exception) -> bool:
     return False
 
 
-# 带指数退避和随机抖动的重试封装，防止重试风暴
 async def _with_retry(fn, max_retries: int = 3):
+    """带指数退避和随机抖动的重试封装，防止重试风暴。"""
     for attempt in range(max_retries + 1):
         try:
             return await fn()

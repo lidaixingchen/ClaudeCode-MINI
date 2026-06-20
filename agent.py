@@ -12,6 +12,11 @@ import anthropic
 from tools import execute_tool, get_tool_definitions
 from prompt import build_system_prompt
 
+import uuid
+import time
+from pathlib import Path
+from session import save_session  # 导入会话保存函数
+
 from dotenv import load_dotenv
 
 #加载环境变量
@@ -146,11 +151,48 @@ class Agent:
         self.state = AgentState()
         self.use_openai = backend.is_openai
 
+        # 初始化消息历史管理器，负责统一格式化两种协议的消息结构
         system_prompt = "You are a helpful coding assistant with access to tools."
         self.history = MessageHistory(use_openai=self.use_openai, system_prompt=system_prompt)
        
+        # 生成 8 位十六进制会话 ID，用于磁盘文件名和会话恢复
+        self.session_id = uuid.uuid4().hex[:8]
+        # 记录会话启动时间（UTC），用于 --resume 时按时间排序
+        self.session_start_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self._abort = False  # Ctrl+C 中断标志位
+
         # 通过 BackendConfig 工厂方法创建客户端——一行搞定
         self._client = backend.create_client()
+
+    def abort(self) -> None:
+        """设置中断标志，供信号处理器调用以终止当前任务。"""
+        self._abort = True
+
+    async def chat(self, user_message: str) -> None:
+        """封装公共的对外对话方法，提供自动保存和异常隔离。"""
+        self._aborted = False  # 每轮对话开始前重置中断标志
+        try:
+            await self._chat(user_message)
+        finally:
+            # finally 确保即使被 Ctrl+C 中断也能保存已生成的对话历史
+            self._auto_save()
+
+    def _auto_save(self) -> None:
+        """自动保存当前会话到磁盘，供 --resume 恢复使用"""
+        try:            
+            save_session(self.session_id, {
+                "metadata": {
+                    "id": self.session_id,
+                    "model": self.config.model,
+                    "cwd": str(Path.cwd()),
+                    "startTime": self.session_start_time,
+                    "messageCount": self.history.message_count(),
+                },
+                **self.history.to_dict(),  # 展开 anthropicMessages/openaiMessages
+            })
+        except Exception:
+            # 保存失败不应影响用户体验，静默忽略
+            pass
 
     async def _chat(self, user_message: str) -> None:
         """统一入口：根据后端配置自动分发到对应的聊天循环"""

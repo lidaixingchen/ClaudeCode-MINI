@@ -111,8 +111,8 @@ Shell: {{shell}}
 # prompt.py（续）
 
 
-# 获取当前 Git 仓库的分支、最近提交和文件状态信息
 def get_git_context() -> str:
+    """获取当前 Git 仓库的分支、最近提交和文件状态信息。"""
     try:
         # 通用子进程参数：UTF-8 编码、3 秒超时、捕获标准输出
         opts = {"encoding": "utf-8", "timeout": 3, "capture_output": True}
@@ -162,13 +162,13 @@ _INCLUDE_RE = re.compile(r"^@(\./[^\s]+|~/[^\s]+|/[^\s]+)$", re.MULTILINE)
 _MAX_INCLUDE_DEPTH = 5  # 防止恶性嵌套
 
 
-# 递归解析 @include 引用，将被引入文件的内容内联替换到当前文本中
 def _resolve_includes(
     content: str,
     base_path: Path,
     visited: set[str] | None = None,
     depth: int = 0,
 ) -> str:
+    """递归解析 @include 引用，将被引入文件的内容内联替换到当前文本中。"""
     if depth >= _MAX_INCLUDE_DEPTH:
         return content
     if visited is None:
@@ -203,8 +203,8 @@ def _resolve_includes(
     return _INCLUDE_RE.sub(_replace, content)
 
 
-# 从 .claude/rules/ 目录加载所有 .md 规则文件，支持模块化规则管理
 def _load_rules_dir(directory: Path) -> str:
+    """从 .claude/rules/ 目录加载所有 .md 规则文件，支持模块化规则管理。"""
     # 定位 .claude/rules/ 目录
     rules_dir = directory / ".claude" / "rules"
     if not rules_dir.is_dir():
@@ -230,8 +230,8 @@ def _load_rules_dir(directory: Path) -> str:
         return ""
 
 
-# 从当前目录向上递归查找所有 CLAUDE.md 文件，合并为项目级指令集
 def load_claude_md() -> str:
+    """从当前目录向上递归查找所有 CLAUDE.md 文件，合并为项目级指令集。"""
     parts: list[str] = []
     d = Path.cwd().resolve()
     # 向上递归查找所有的 CLAUDE.md
@@ -286,8 +286,8 @@ def load_claude_md() -> str:
 from datetime import date
 
 
-# 编译完整的 System Prompt：将动态上下文替换到静态模板中
 def build_system_prompt() -> str:
+    """编译完整的 System Prompt：将动态上下文替换到静态模板中。"""
     # 收集所有动态上下文，构建占位符替换映射
     replacements = {
         "{{cwd}}": str(Path.cwd()),                              # 当前工作目录

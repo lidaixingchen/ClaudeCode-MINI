@@ -147,7 +147,7 @@ Edit the file test/quote-test.js and change the version to "9.9.9". Do NOT read 
 ```
 Read the file test/large-file.txt
 ```
-✅ **预期输出**：终端检测到文件大小超标，不会输出全部 1000 行，而是提示 `[Result too large... saved to ~/.mini-claude/tool-results/]` 并仅截取前 200 行用于预览。
+✅ **预期输出**：终端检测到文件大小超标，不会输出全部 1000 行，而是提示 `[Result too large... saved to ./.mini-claude/tool-results/]` 并仅截取前 200 行用于预览。
 接着追问：`What does line 500 say?`
 大模型能够聪明地调用 `read_file`（指定行号范围）或 `grep_search` 准确定位并返回第 500 行的文本。
 
@@ -265,7 +265,7 @@ python __main__.py --yolo --max-turns 2 "Read these files one by one: test/quote
 ✅ **预期输出**：模型在读取完第一个文件后，还没来得及读取第二个，系统直接进行 Turn 校验拦截，打印 `[INFO] Budget exceeded: Turn limit reached (2 >= 2)` 并退出。
 
 #### 注意什么
-`--resume` 是通过扫描本地 `~/.mini-claude/sessions/` 下最新修改的 JSON 存档文件来恢复的，确保没有其它测试程序中途篡改了该目录。
+`--resume` 是通过扫描本地 `./sessions/` 下最新修改的 JSON 存档文件来恢复的，确保没有其它测试程序中途篡改了该目录。
 
 ---
 

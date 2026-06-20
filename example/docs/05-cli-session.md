@@ -44,11 +44,11 @@ python __main__.py
 ## 📦 涉及文件
 
 修改：
-- `session.py`
 - `agent.py`
 - `__main__.py`
 
 创建：
+- `session.py`
 - `ui.py`
 
 ---
@@ -59,7 +59,7 @@ python __main__.py
 
 #### 为什么做
 
-Agent 在运行过程中，我们需要随时将其当前的对话历史持久化到本地。这样即便程序崩溃或用户主动退出，对话记录也不会丢失。我们会将会话以 JSON 格式保存在用户主目录下的 `.mini-claude/sessions` 目录中。
+Agent 在运行过程中，我们需要随时将其当前的对话历史持久化到本地。这样即便程序崩溃或用户主动退出，对话记录也不会丢失。我们会将会话以 JSON 格式保存在当前目录下的 `.mini-claude/sessions` 目录中。
 
 #### 做什么
 
@@ -74,24 +74,24 @@ import json
 from pathlib import Path
 from typing import Any
 
-# 会话文件存储目录，位于用户主目录下
-SESSION_DIR = Path.home() / ".mini-claude" / "sessions"
+# 会话文件存储目录，位于当前工作目录下
+SESSION_DIR = Path.cwd() / ".mini-claude" / "sessions"
 
 
-# 确保存储目录存在，不存在则递归创建
 def _ensure_dir() -> None:
+    """确保存储目录存在，不存在则递归创建。"""
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# 将会话数据序列化为 JSON 并写入磁盘
 def save_session(session_id: str, data: dict[str, Any]) -> None:
+    """将会话数据序列化为 JSON 并写入磁盘。"""
     _ensure_dir()
     # 使用 indent=2 生成可读的 JSON，default=str 处理 datetime 等不可序列化类型
     (SESSION_DIR / f"{session_id}.json").write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
 
 
-# 从磁盘加载指定 ID 的会话数据，不存在或损坏则返回 None
 def load_session(session_id: str) -> dict[str, Any] | None:
+    """从磁盘加载指定 ID 的会话数据，不存在或损坏则返回 None。"""
     path = SESSION_DIR / f"{session_id}.json"
     if not path.exists():
         return None
@@ -101,8 +101,8 @@ def load_session(session_id: str) -> dict[str, Any] | None:
         return None
 
 
-# 列出所有已保存会话的元数据摘要
 def list_sessions() -> list[dict[str, Any]]:
+    """列出所有已保存会话的元数据摘要。"""
     _ensure_dir()
     results = []
     for f in SESSION_DIR.glob("*.json"):
@@ -116,8 +116,8 @@ def list_sessions() -> list[dict[str, Any]]:
     return results
 
 
-# 获取最近一次会话的 ID，用于 --resume 恢复
 def get_latest_session_id() -> str | None:
+    """获取最近一次会话的 ID，用于 --resume 恢复。"""
     sessions = list_sessions()
     if not sessions:
         return None
@@ -145,20 +145,17 @@ def get_latest_session_id() -> str | None:
 
 import uuid
 import time
+from pathlib import Path
 from session import save_session  # 导入会话保存函数
 
 
 class Agent:
-    def __init__(
-        self,
-        model: str = "claude-sonnet-4-6",
-        api_base: str | None = None,
-        api_key: str | None = None,
-    ):
-        self.config = AgentConfig(model=model, api_base=api_base, api_key=api_key)
+    def __init__(self, backend: BackendConfig):
+        """初始化 Agent 实例。"""
+        self.backend = backend
+        self.config = AgentConfig()
         self.state = AgentState()
-        # api_base 非空则走 OpenAI 兼容协议，否则走 Anthropic 原生协议
-        self.use_openai = bool(api_base)
+        self.use_openai = backend.is_openai
 
         # 初始化消息历史管理器，负责统一格式化两种协议的消息结构
         system_prompt = "You are a helpful coding assistant with access to tools."
@@ -169,20 +166,15 @@ class Agent:
         self.session_start_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._aborted = False  # Ctrl+C 中断标志位
 
-        # 根据协议类型初始化对应的异步 API 客户端
-        if self.use_openai:
-            self._openai_client = openai.AsyncOpenAI(base_url=api_base, api_key=api_key)
-            self._anthropic_client = None
-        else:
-            self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
-            self._openai_client = None
+        # 通过 BackendConfig 工厂方法创建客户端——一行搞定
+        self._client = backend.create_client()
 
     def abort(self) -> None:
         """设置中断标志，供信号处理器调用以终止当前任务。"""
         self._aborted = True
 
-    # 封装公共的对外对话方法，提供自动保存和异常隔离
     async def chat(self, user_message: str) -> None:
+        """封装公共的对外对话方法，提供自动保存和异常隔离。"""
         self._aborted = False  # 每轮对话开始前重置中断标志
         try:
             await self._chat(user_message)
@@ -190,8 +182,8 @@ class Agent:
             # finally 确保即使被 Ctrl+C 中断也能保存已生成的对话历史
             self._auto_save()
 
-    # 自动将会话状态持久化到磁盘
     def _auto_save(self) -> None:
+        """自动将会话状态持久化到磁盘。"""
         try:
             # 组装会话文件内容：顶层包含 metadata 和消息历史
             save_session(self.session_id, {
@@ -208,14 +200,14 @@ class Agent:
             # 保存失败不应影响用户体验，静默忽略
             pass
 
-    # 从持久化的会话数据中恢复消息历史
     def restore_session(self, data: dict) -> None:
+        """从持久化的会话数据中恢复消息历史。"""
         # data 包含 anthropicMessages 或 openaiMessages，由 history.restore 统一处理
         self.history.restore(data)
         print(f"  [cyan]ℹ Session restored ({self.history.message_count()} messages).[/cyan]")
 
-    # 清空对话历史，保留系统提示词
     def clear_history(self) -> None:
+        """清空对话历史，保留系统提示词。"""
         self.history.clear(keep_system=True)
         print("  [cyan]ℹ Conversation history cleared.[/cyan]")
 ```
@@ -239,25 +231,25 @@ class Agent:
 ```python
 # ui.py — 终端 UI 辅助函数
 
-# 打印欢迎横幅和使用提示
 def print_welcome() -> None:
+    """打印欢迎横幅和使用提示。"""
     print("  Mini Claude Code — A minimal coding agent\n")
     print("  Type your request, or 'exit' to quit.")
     print("  Commands: /clear /plan /cost\n")
 
 
-# 打印用户输入提示符（不换行，等待用户输入）
 def print_user_prompt() -> None:
+    """打印用户输入提示符（不换行，等待用户输入）。"""
     print("\n> ", end="")
 
 
-# 打印错误信息（红色标签，后续引入 rich 库后会渲染颜色）
 def print_error(msg: str) -> None:
+    """打印错误信息（红色标签，后续引入 rich 库后会渲染颜色）。"""
     print(f"  [red]Error: {msg}[/red]")
 
 
-# 打印提示信息（青色标签，用于状态通知）
 def print_info(msg: str) -> None:
+    """打印提示信息（青色标签，用于状态通知）。"""
     print(f"  [cyan]ℹ {msg}[/cyan]")
 ```
 
@@ -285,14 +277,14 @@ import sys
 import signal
 import asyncio
 import argparse
-from agent import Agent
+from agent import Agent, BackendConfig
 from tools import PermissionMode
 from session import load_session, get_latest_session_id
 from ui import print_welcome, print_user_prompt, print_error, print_info
 
 
-# 解析命令行参数，返回命名空间对象
 def parse_args() -> argparse.Namespace:
+    """解析命令行参数，返回命名空间对象。"""
     parser = argparse.ArgumentParser(
         prog="mini-claude",
         description="Mini Claude Code — a minimal coding agent",
@@ -323,7 +315,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# 将命令行权限参数映射为 Agent 内部权限模式字符串
 def _resolve_permission_mode(args: argparse.Namespace) -> PermissionMode:
     """将命令行权限参数映射为 Agent 内部权限模式字符串。"""
     if args.yolo:
@@ -337,8 +328,8 @@ def _resolve_permission_mode(args: argparse.Namespace) -> PermissionMode:
     return "default"
 
 
-# 程序主入口：解析参数、初始化 Agent、决定单次/交互模式
 def main() -> None:
+    """程序主入口：解析参数、初始化 Agent、决定单次/交互模式。"""
     args = parse_args()
 
     if args.help:
@@ -384,49 +375,13 @@ Examples:
     api_base = args.api_base
 
     # ── API 密钥与端点解析 ────────────────────────────────────
-    # 优先级：OPENAI_API_KEY+OPENAI_BASE_URL > ANTHROPIC_API_KEY > OPENAI_API_KEY
-    resolved_api_base = api_base
-    resolved_api_key: str | None = None
-    resolved_use_openai = bool(api_base)
-
-    if os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_BASE_URL"):
-        resolved_api_key = os.environ["OPENAI_API_KEY"]
-        resolved_api_base = resolved_api_base or os.environ.get("OPENAI_BASE_URL")
-        resolved_use_openai = True
-    elif os.environ.get("ANTHROPIC_API_KEY"):
-        resolved_api_key = os.environ["ANTHROPIC_API_KEY"]
-        resolved_api_base = resolved_api_base or os.environ.get("ANTHROPIC_BASE_URL")
-        resolved_use_openai = False
-    elif os.environ.get("OPENAI_API_KEY"):
-        resolved_api_key = os.environ["OPENAI_API_KEY"]
-        resolved_api_base = resolved_api_base or os.environ.get("OPENAI_BASE_URL")
-        resolved_use_openai = True
-
-    # 若指定了 api-base 但未找到密钥，尝试从任一环境变量中回退获取
-    if not resolved_api_key and api_base:
-        resolved_api_key = (os.environ.get("OPENAI_API_KEY")
-                            or os.environ.get("ANTHROPIC_API_KEY"))
-        resolved_use_openai = True
-
-    # 缺少密钥时给出明确提示并退出
-    if not resolved_api_key:
-        print_error(
-            "API key is required.\n"
-            "  Set ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL) for Anthropic format,\n"
-            "  or OPENAI_API_KEY + OPENAI_BASE_URL for OpenAI-compatible format."
-        )
+    try:
+        backend = BackendConfig.from_env(model=model, api_base_override=api_base)
+    except ValueError as e:
+        print_error(str(e))
         sys.exit(1)
 
-    agent = Agent(
-        permission_mode=permission_mode,
-        model=model,
-        thinking=args.thinking,
-        max_cost_usd=args.max_cost,
-        max_turns=args.max_turns,
-        api_base=resolved_api_base if resolved_use_openai else None,
-        anthropic_base_url=resolved_api_base if not resolved_use_openai else None,
-        api_key=resolved_api_key,
-    )
+    agent = Agent(backend=backend)
 
     # --resume 模式：恢复最近一次会话的历史消息
     if args.resume:
@@ -478,12 +433,11 @@ if __name__ == "__main__":
 # __main__.py（续）
 
 
-# 交互式 REPL 循环：读取用户输入、分发命令、处理信号
 async def run_repl(agent: Agent) -> None:
-    """Interactive REPL loop."""
+    """交互式 REPL 循环：读取用户输入、分发命令、处理信号。"""
 
-    # 确认回调：Agent 在需要用户授权时暂停执行并等待终端输入 y/n
     async def confirm_fn(message: str) -> bool:
+        """确认回调：Agent 在需要用户授权时暂停执行并等待终端输入 y/n。"""
         try:
             answer = input("  Allow? (y/n): ")
             return answer.lower().startswith("y")
@@ -496,6 +450,7 @@ async def run_repl(agent: Agent) -> None:
     sigint_count = 0  # 用于检测连续两次 Ctrl+C
 
     def handle_sigint(sig, frame):
+        """SIGINT 信号处理器：区分"中断任务"与"退出程序"。"""
         nonlocal sigint_count
         if agent._aborted is False and agent.is_processing:
             # Agent 正在执行任务，中断当前任务但不退出程序

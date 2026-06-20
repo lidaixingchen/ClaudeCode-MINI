@@ -47,7 +47,6 @@
 ```python
 # tools.py 中的修改
 
-import re
 import json
 from pathlib import Path
 
@@ -78,8 +77,8 @@ DANGEROUS_PATTERNS = [
 ]
 
 
-# 静态扫描命令是否匹配危险模式（作为第一层防护）
 def is_dangerous(command: str) -> bool:
+    """静态扫描命令是否匹配危险模式（作为第一层防护）。"""
     # 只要命中任意正则，即标记为危险
     return any(p.search(command) for p in DANGEROUS_PATTERNS)
 
@@ -107,8 +106,8 @@ def is_dangerous(command: str) -> bool:
 # tools.py（续）
 
 
-# 加载 JSON 配置文件，文件不存在或解析失败时返回 None
 def _load_settings(path: Path) -> dict | None:
+    """加载 JSON 配置文件，文件不存在或解析失败时返回 None。"""
     if not path.exists():
         return None
     try:
@@ -118,8 +117,8 @@ def _load_settings(path: Path) -> dict | None:
         return None
 
 
-# 解析权限规则字符串，格式如 "run_shell(git status)" 或 "read_file"
 def _parse_rule(rule: str) -> dict:
+    """解析权限规则字符串，格式如 "run_shell(git status)" 或 "read_file"。"""
     # 匹配类似于 run_shell(git status) 的格式
     m = re.match(r"^([a-z_]+)\((.+)\)$", rule)
     if m:
@@ -131,8 +130,8 @@ def _parse_rule(rule: str) -> dict:
 _cached_rules: dict | None = None  # 缓存已加载的规则，避免重复读取文件
 
 
-# 加载并合并全局与项目级权限规则
 def load_permission_rules() -> dict:
+    """加载并合并全局与项目级权限规则。"""
     global _cached_rules
     if _cached_rules is not None:
         return _cached_rules
@@ -159,8 +158,8 @@ def load_permission_rules() -> dict:
     return _cached_rules
 
 
-# 检查单条规则是否匹配当前工具调用（支持通配符和精确匹配）
 def _matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
+    """检查单条规则是否匹配当前工具调用（支持通配符和精确匹配）。"""
     if rule["tool"] != tool_name:
         return False
     if rule["pattern"] is None:
@@ -210,8 +209,8 @@ def _matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
 # tools.py（续）
 
 
-# 评估配置文件中的 allow/deny 规则，返回 "deny"/"allow"/None
 def _check_permission_rules(tool_name: str, inp: dict) -> str | None:
+    """评估配置文件中的 allow/deny 规则，返回 "deny"/"allow"/None。"""
     rules = load_permission_rules()
     # deny 规则优先级更高，先遍历
     for rule in rules["deny"]:
@@ -224,13 +223,13 @@ def _check_permission_rules(tool_name: str, inp: dict) -> str | None:
     return None  # 无匹配规则，交给后续逻辑判断
 
 
-# 统一权限评判引擎：根据安全模式和规则库返回 allow/deny/confirm 三态决策
 def check_permission(
     tool_name: str,
     inp: dict,
     mode: str = "default",
     plan_file_path: str | None = None,
 ) -> dict:
+    """统一权限评判引擎：根据安全模式和规则库返回 allow/deny/confirm 三态决策。"""
     # 0. bypassPermissions (--yolo) 模式：无条件直接放行，必须在最顶层
     if mode == "bypassPermissions":
         return {"action": "allow"}

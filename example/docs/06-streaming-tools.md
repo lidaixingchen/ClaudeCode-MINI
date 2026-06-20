@@ -106,7 +106,7 @@ from tools import (
         tool_blocks_by_index = {}
 
         # 开启流式 API 监听，使用 async with 确保流正确关闭
-        async with self._anthropic_client.messages.stream(**create_params) as stream:
+        async with self._client.messages.stream(**create_params) as stream:
             async for event in stream:
                 if not hasattr(event, 'type'):
                     continue
@@ -155,8 +155,8 @@ from tools import (
 ```python
 # agent.py 顶部的辅助函数
 
-# 根据模型名称动态返回最大输出 token 数，避免硬编码
 def _get_max_output_tokens(model: str) -> int:
+    """根据模型名称动态返回最大输出 token 数，避免硬编码。"""
     m = model.lower()
     if "opus-4-6" in m:
         return 64000   # opus-4-6 拥有最大的输出能力
@@ -192,7 +192,7 @@ LARGE_RESULT_PREVIEW_LINES = 200        # 预览保留的行数
         if len(result.encode()) <= LARGE_RESULT_THRESHOLD:
             return result
         # 创建工具结果存储目录
-        d = Path.home() / ".mini-claude" / "tool-results"
+        d = Path.cwd() / ".mini-claude" / "tool-results"
         d.mkdir(parents=True, exist_ok=True)
         # 文件名包含毫秒时间戳和工具名，便于事后追溯
         filename = f"{int(time.time() * 1000)}-{tool_name}.txt"
@@ -215,7 +215,7 @@ LARGE_RESULT_PREVIEW_LINES = 200        # 预览保留的行数
 #### 注意什么
 
 - 阈值以**字节数**（`len(result.encode())`）而非字符数衡量，因为中文字符占 3 字节，确保对多语言内容一视同仁。
-- 持久化目录 `~/.mini-claude/tool-results` 会在首次调用时自动创建，文件名包含毫秒时间戳和工具名，便于事后追溯。
+- 持久化目录 `./.mini-claude/tool-results` 会在首次调用时自动创建，文件名包含毫秒时间戳和工具名，便于事后追溯。
 - 返回给 Agent 的预览摘要仍然包含足够信息让模型理解输出内容，同时大幅降低了 token 消耗。
 
 ---
