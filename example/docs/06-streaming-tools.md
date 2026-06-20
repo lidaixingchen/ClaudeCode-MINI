@@ -63,6 +63,8 @@ CONCURRENCY_SAFE_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch"}
 ```python
 # agent.py 中的导入修改
 
+import asyncio                  # 步骤 4 需要 asyncio.create_task 实现异步抢跑
+import json                     # 步骤 2 的 _call_anthropic_stream 中需要 json.loads 解析工具参数
 from tools import (
     tool_definitions,
     execute_tool,
@@ -268,7 +270,7 @@ LARGE_RESULT_PREVIEW_LINES = 200        # 预览保留的行数
 ```python
 # Agent 类中添加 _execute_tool_call 封装方法
 async def _execute_tool_call(self, name: str, args: dict) -> str:
-    “””执行工具调用的封装方法，便于后续添加日志、权限检查等逻辑。”””
+    """执行工具调用的封装方法，便于后续添加日志、权限检查等逻辑。"""
     return await execute_tool(name, args)
 ```
 
