@@ -62,7 +62,6 @@ import hashlib
 import re
 from pathlib import Path
 
-from dataclasses import dataclass
 
 # ─── Types ──────────────────────────────────────────────────
 
@@ -71,14 +70,16 @@ MAX_INDEX_LINES = 200
 MAX_INDEX_BYTES = 25000
 
 
-@dataclass
 class MemoryEntry:
     """单条记忆的数据模型，用于在内存中表示一条记忆记录。"""
-    name: str                          # 记忆的显示名称
-    description: str                   # 一句话描述
-    type: str                          # 记忆类型（user/feedback/project/reference）
-    filename: str                      # 对应的 .md 文件名
-    content: str = ""                  # 文件正文内容
+    __slots__ = ("name", "description", "type", "filename", "content")
+
+    def __init__(self, name: str, description: str, type: str, filename: str, content: str = ""):
+        self.name = name                          # 记忆的显示名称
+        self.description = description             # 一句话描述
+        self.type = type                           # 记忆类型（user/feedback/project/reference）
+        self.filename = filename                   # 对应的 .md 文件名
+        self.content = content                     # 文件正文内容
 
 
 # ─── Paths ──────────────────────────────────────────────────
@@ -95,6 +96,10 @@ def get_memory_dir() -> Path:
     d = Path.cwd() / ".mini-claude" / "projects" / _project_hash() / "memory"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _get_index_path() -> Path:
+    return get_memory_dir() / "MEMORY.md"
 ```
 
 #### 注意什么
@@ -514,7 +519,7 @@ async def select_relevant_memories(
         selected_filenames = set(parsed.get("selected_memories", []))
 
         # 最多只召回 5 条记忆，防止上下文爆炸
-        selected = [h for h in candidates if h.file_path in selected_filenames][:5]
+        selected = [h for h in candidates if h.filename in selected_filenames][:5]
 
         result: list[RelevantMemory] = []
         for h in selected:
@@ -776,7 +781,7 @@ class Agent:
                 # Anthropic 后端需要从 content 中筛选 type == “text” 的块并拼接
                 return “”.join(b.text for b in resp.content if b.type == “text”)
             return _sq
-        if self.use_openai:
+        else:
             client = self._client
             model = self.backend.model
 
@@ -791,8 +796,7 @@ class Agent:
                 # OpenAI 后端直接从 choices[0].message.content 获取
                 return resp.choices[0].message.content or “” if resp.choices else “”
             return _sq_oai
-        # 未配置任何 API 客户端时返回 None，调用方需检查后跳过语义召回
-        return None
+
 
     # ─── Memory prefetch integration ─────────────────────────
 
@@ -820,27 +824,27 @@ class Agent:
             self.state.session_memory_bytes,
         )
 
-    async def _consume_memory_prefetch(self, prefetch: MemoryPrefetch | None) -> None:
-        """消费记忆预取结果，将召回的记忆注入到 System Prompt 中。
+    def _consume_memory_prefetch(self, prefetch: MemoryPrefetch | None) -> None:
+        “””消费记忆预取结果，将召回的记忆注入到最后一条用户消息中。
 
         如果预取任务已完成且未被消费，则将结果注入到上下文中。
-        """
+        注意：记忆注入用户消息而非 System Prompt，因为 System Prompt 每轮都会重建。
+        “””
         if not prefetch or prefetch.consumed or not prefetch.settled:
             return
         prefetch.consumed = True
         try:
-            memories = await prefetch.task
+            memories = prefetch.task.result()
             if memories:
-                # 将召回的记忆格式化并注入到 System Prompt
-                memory_section = format_memories_for_injection(memories)
-                self._system_prompt += "\n\n" + memory_section
-                self.history.update_system_prompt(self._system_prompt)
-                # 更新已注入的记忆集合，避免重复注入
+                # 将召回的记忆格式化并注入到最后一条用户消息
+                injection_text = format_memories_for_injection(memories)
+                self.history.update_last_user_content(injection_text)
+                # 更新已注入的记忆集合与会话记忆字节数，避免重复注入
                 for m in memories:
-                    self.state.already_surfaced_memories.add(m.filename)
+                    self.state.already_surfaced_memories.add(m.path)
+                    self.state.session_memory_bytes += len(m.content.encode())
         except Exception as e:
-            # 预取失败不应影响主流程，静默忽略
-            pass
+            logger.debug(f"Memory prefetch failed: {e}")
 ```
 
 最后，需要更新 `_chat_anthropic` 和 `_chat_openai` 主循环，启用记忆预取：
@@ -868,7 +872,7 @@ class Agent:
             self._run_compression_pipeline()
 
             # 消费记忆预取结果（第 10 课新增）
-            await self._consume_memory_prefetch(memory_prefetch)
+            self._consume_memory_prefetch(memory_prefetch)
 
             # ... 调用 API 并处理响应 ...
 ```

@@ -91,7 +91,7 @@ class Agent:
         """检查是否需要自动压缩：当 Token 占用率超过 85% 时触发。"""
         # 当最近一次模型返回的输入 Token 超过有效窗口的 85% 时，触发压缩
         if self.state.last_input_token_count > self.effective_window * AUTOCOMPACT_THRESHOLD:
-            print("  [cyan]ℹ Context window filling up, compacting conversation...[/cyan]")
+            print_info("Context window filling up, compacting conversation...")
             await self._compact_conversation()
 ```
 
@@ -131,6 +131,7 @@ class Agent:
             await self._compact_openai()
         else:
             await self._compact_anthropic()
+        print_info("Conversation compacted.")
 
     async def _compact_anthropic(self) -> None:
         """Anthropic 后端压缩：利用大模型自身能力总结历史对话。"""
@@ -163,7 +164,7 @@ class Agent:
             {"role": "user", "content": f"[Previous conversation summary]\n{summary}"},
             {
                 "role": "assistant",
-                "content": "Understood. I have the context of our previous conversation. How can I continue helping?",
+                "content": "Understood. I have the context from our previous conversation. How can I continue helping?",
             },
         ]
 
@@ -205,7 +206,7 @@ class Agent:
             {"role": "user", "content": f"[Previous conversation summary]\n{summary}"},
             {
                 "role": "assistant",
-                "content": "Understood. I have the context of our previous conversation. How can I continue helping?",
+                "content": "Understood. I have the context from our previous conversation. How can I continue helping?",
             },
         ]
 
@@ -248,7 +249,6 @@ class Agent:
 
     def _run_compression_pipeline(self) -> None:
         """执行三级压缩流水线：Tier 1（预算裁剪）-> Tier 2（陈旧替换）-> Tier 3（空闲清理）。"""
-        “””执行三级压缩流水线：Tier 1 -> Tier 2 -> Tier 3”””
         if self.use_openai:
             self._budget_tool_results_openai()
             self._snip_stale_results_openai()
@@ -261,7 +261,6 @@ class Agent:
     # ─── Tier 1: Budget tool results（预算裁剪）────────────────
     def _budget_tool_results_anthropic(self) -> None:
         """利用率 50% 时裁剪过长的单个工具结果，保留首尾部分。"""
-        “””利用率 50% 时裁剪过长的工具结果”””
         utilization = self.state.last_input_token_count / self.effective_window if self.effective_window else 0
         if utilization < 0.5:
             return  # 利用率未达阈值，跳过
@@ -278,7 +277,6 @@ class Agent:
 
     def _budget_tool_results_openai(self) -> None:
         """OpenAI 后端的 Tier 1 裁剪逻辑。"""
-        “””OpenAI 后端的 Tier 1 裁剪”””
         utilization = self.state.last_input_token_count / self.effective_window if self.effective_window else 0
         if utilization < 0.5:
             return
@@ -291,7 +289,6 @@ class Agent:
     # ─── Tier 2: Snip stale results（陈旧结果替换）─────────────
     def _snip_stale_results_anthropic(self) -> None:
         """利用率 60% 时将旧的工具结果替换为占位符，保留最近 3 个。"""
-        “””利用率 60% 时替换旧结果为占位符”””
         utilization = self.state.last_input_token_count / self.effective_window if self.effective_window else 0
         if utilization < SNIP_THRESHOLD:
             return
@@ -337,7 +334,6 @@ class Agent:
 
     def _snip_stale_results_openai(self) -> None:
         """OpenAI 后端的 Tier 2 裁剪逻辑。"""
-        “””OpenAI 后端的 Tier 2 裁剪”””
         utilization = self.state.last_input_token_count / self.effective_window if self.effective_window else 0
         if utilization < SNIP_THRESHOLD:
             return
@@ -356,7 +352,6 @@ class Agent:
     # ─── Tier 3: Microcompact（空闲清理）───────────────────────
     def _microcompact_anthropic(self) -> None:
         """空闲 5 分钟后清除所有旧结果为占位符。"""
-        “””空闲 5 分钟后清除旧结果”””
         # 检查是否已空闲足够长时间
         if not self.state.last_api_call_time or (time.time() - self.state.last_api_call_time) < MICROCOMPACT_IDLE_S:
             return
@@ -376,7 +371,6 @@ class Agent:
 
     def _microcompact_openai(self) -> None:
         """OpenAI 后端的 Tier 3 清理逻辑。"""
-        “””OpenAI 后端的 Tier 3 清理”””
         if not self.state.last_api_call_time or (time.time() - self.state.last_api_call_time) < MICROCOMPACT_IDLE_S:
             return
         tool_msgs = []
@@ -390,7 +384,6 @@ class Agent:
     # ─── Helper: 查找工具调用信息 ──────────────────────────────
     def _find_tool_use_by_id(self, tool_use_id: str) -> dict | None:
         """根据 tool_use_id 在历史中反向查找对应的工具调用（用于 Tier 2 判断工具类型）。"""
-        “””根据 tool_use_id 在历史中查找对应的工具调用”””
         for msg in self.history.anthropic_messages:
             if msg.get(“role”) != “assistant” or not isinstance(msg.get(“content”), list):
                 continue
@@ -402,7 +395,6 @@ class Agent:
     # ─── Large result persistence（大结果持久化）────────────────
     def _persist_large_result(self, tool_name: str, result: str) -> str:
         """将超大工具结果（>30KB）保存到本地文件，只在历史中保留预览。"""
-        “””将超大工具结果持久化到文件，返回摘要和预览”””
         if len(result.encode()) <= LARGE_RESULT_THRESHOLD:
             return result  # 未超阈值，直接返回原文
         # 确保存储目录存在
@@ -476,7 +468,8 @@ class Agent:
             if self._aborted:
                 break
 
-            # 每次迭代前执行三级压缩流水线
+            # 每次迭代前更新系统提示词并执行三级压缩流水线
+            self._update_system_prompt()
             self._run_compression_pipeline()  # Tier 1/2/3 本地压缩，开销极低
             # 注：第 10 课会实现 _consume_memory_prefetch 方法
             # self._consume_memory_prefetch(memory_prefetch)
@@ -513,7 +506,8 @@ class Agent:
             if self._aborted:
                 break
 
-            # 每次迭代前执行三级压缩流水线
+            # 每次迭代前更新系统提示词并执行三级压缩流水线
+            self._update_system_prompt()
             self._run_compression_pipeline()  # Tier 1/2/3 本地压缩
             # 注：第 10 课会实现 _consume_memory_prefetch 方法
             # self._consume_memory_prefetch(memory_prefetch)

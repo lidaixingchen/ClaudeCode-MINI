@@ -29,16 +29,61 @@ load_dotenv()
 LARGE_RESULT_THRESHOLD = 30 * 1024      # 30 KB 阈值，超过则持久化到磁盘
 LARGE_RESULT_PREVIEW_LINES = 200        # 预览保留的行数
 
-def _get_max_output_tokens(model: str) -> int:
-    """根据模型名称动态返回最大输出 token 数，避免硬编码。"""
+# 已知支持推理/思考的第三方模型关键词（小写）
+_THINKING_MODEL_KEYWORDS = ("deepseek", "qwq", "grok-3", "reasoning", "think")
+
+def _model_supports_thinking(model: str) -> bool:
+    """判断模型是否支持 Extended Thinking（思考链）功能。
+
+    检测优先级：
+    1. Claude 模型硬编码（已知型号自动识别）
+    2. THINKING_MODE 环境变量显式覆盖（第三方模型推荐方式）
+    3. 关键词启发式匹配（deepseek-r1、qwq 等）
+    4. 默认返回 False（安全回退）
+    """
     m = model.lower()
-    if "opus-4-6" in m:
-        return 64000   # opus-4-6 拥有最大的输出能力
-    if "sonnet-4-6" in m:
-        return 32000
-    if any(x in m for x in ("opus-4", "sonnet-4", "haiku-4")):
-        return 32000
-    return 16384  # 未知模型使用保守默认值
+    if "claude" in m:
+        # Claude 模型根据版本自动识别，4-6 版本及以上支持思考链
+        return any(x in m for x in ("4-6", "4.6", "5", "5.0", "sonnet-4-6", "opus-4-6"))
+    # 2. 环境变量覆盖：用户可以通过设置 THINKING_MODE=enabled 来启用第三方模型的思考链功能
+    thinking_mode_env = os.environ.get("THINKING_MODE", "").lower()
+    if thinking_mode_env == "enabled":
+        return True
+    if thinking_mode_env == "disabled":
+        return False
+    # 3. 关键词启发式匹配：如果模型名称包含已知支持思考的关键词，则启用思考链
+    return any(keyword in m for keyword in _THINKING_MODEL_KEYWORDS)
+
+def _model_supports_adaptive_thinking(model: str) -> bool:
+    """判断模型是否支持自适应思考模式（可动态调整思考深度）。
+
+    仅 Claude opus-4-6 / sonnet-4-6 原生支持。
+    第三方模型需显式设置 THINKING_MODE=adaptive 才会启用。
+    """
+    m = model.lower()
+    if "claude" in m:
+        return any(x in m for x in ("opus-4-6", "sonnet-4-6"))
+    thinking_mode_env = os.environ.get("THINKING_MODE", "").lower()
+    return thinking_mode_env == "adaptive"
+
+
+def _get_max_output_tokens(model: str) -> int:
+    """根据模型版本返回最大输出 Token 数。
+
+    Claude 模型使用硬编码值；第三方模型通过 MAX_OUTPUT_TOKENS 环境变量覆盖。
+    """
+    env_override = os.environ.get("MAX_OUTPUT_TOKENS")
+    if env_override and env_override.isdigit():
+        return int(env_override)
+
+    m = model.lower()
+    if "claude" in m:
+        if any(x in m for x in ("4-6", "4.6", "sonnet-4-6", "opus-4-6")):
+            return 16384
+        if "5" in m or "5.0" in m:
+            return 32768
+    # 默认值，适用于未知模型或第三方模型
+    return 8192
 
 @dataclass
 class BackendConfig:
@@ -334,10 +379,6 @@ class Agent:
             # 将所有工具执行结果追加到历史，供下一轮对话使用 
             self.history.append_tool_results(tool_results)   
 
-        # 输出最终回复
-        for block in response.content:
-            if block.type == "text":
-                print(block.text)
                     
     @staticmethod
     def _block_to_dict(block) -> dict:
@@ -410,10 +451,6 @@ class Agent:
                     "content": result,
                 })
             self.history.messages.extend(tool_results)  # 直接 extend，因为 OpenAI 模式下工具结果也是 role: "tool" 消息
-
-        # 输出最终回复
-        if message.content:
-            print(message.content)
 
     async def _call_anthropic_stream(self, on_tool_block_complete=None) -> Any:
         """流式调用 Anthropic API，监听 tool_use 块并在完成时触发回调。"""
@@ -506,6 +543,8 @@ class Agent:
     async def _execute_tool_call(self, name: str, args: dict) -> str:
         """执行工具调用的封装方法，便于后续添加日志、权限检查等逻辑。"""
         return await execute_tool(name, args)
+    
+    
     
 
     

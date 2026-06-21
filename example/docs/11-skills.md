@@ -106,6 +106,48 @@ def discover_skills() -> list[SkillDefinition]:
     return _cached_skills
 
 
+def reset_skill_cache() -> None:
+    global _cached_skills
+    _cached_skills = None
+
+
+def _parse_skill_file(file_path: Path, source: str, skill_dir: str) -> SkillDefinition | None:
+    """解析单个 SKILL.md 文件，返回 SkillDefinition 或 None（解析失败时）。"""
+    try:
+        raw = file_path.read_text(encoding="utf-8")
+        result = parse_frontmatter(raw)
+        meta = result.meta
+
+        # 默认提取 YAML 头中的 name，缺省则以子目录名作为技能名
+        name = meta.get("name") or Path(skill_dir).name
+        user_invocable = meta.get("user-invocable", "true").lower() != "false"
+
+        context = "fork" if meta.get("context") == "fork" else "inline"
+        allowed_tools = None
+        if "allowed-tools" in meta:
+            try:
+                # 优先尝试 JSON 数组格式：["tool1", "tool2"]
+                import json
+                allowed_tools = json.loads(meta["allowed-tools"])
+            except Exception:
+                # 降级为逗号分隔格式：tool1, tool2
+                allowed_tools = [t.strip() for t in meta["allowed-tools"].split(",")]
+
+        return SkillDefinition(
+            name=name,
+            description=meta.get("description", ""),
+            when_to_use=meta.get("when_to_use") or meta.get("when-to-use", ""),
+            prompt_template=result.body,
+            user_invocable=user_invocable,
+            skill_dir=skill_dir,
+            source=source,
+            context=context,
+            allowed_tools=allowed_tools,
+        )
+    except Exception:
+        return None
+
+
 def _load_skills_from_dir(directory: Path, source: str, skills: dict[str, SkillDefinition]) -> None:
     """从指定目录扫描并加载技能定义，填充到 skills 字典中。"""
     if not directory.is_dir():
@@ -117,41 +159,10 @@ def _load_skills_from_dir(directory: Path, source: str, skills: dict[str, SkillD
         skill_file = entry / "SKILL.md"
         if not skill_file.exists():
             continue
-        try:
-            raw = skill_file.read_text(encoding="utf-8")
-            result = parse_frontmatter(raw)
-            meta = result.meta
-
-            # 默认提取 YAML 头中的 name，缺省则以子目录名作为技能名
-            name = meta.get("name") or entry.name
-            user_invocable = meta.get("user-invocable", "true").lower() != "false"
-
-            context = meta.get("context") or "inline"
-            allowed_tools = None
-            if "allowed-tools" in meta:
-                try:
-                    # 优先尝试 JSON 数组格式：["tool1", "tool2"]
-                    import json
-                    allowed_tools = json.loads(meta["allowed-tools"])
-                except Exception:
-                    # 降级为逗号分隔格式：tool1, tool2
-                    allowed_tools = [t.strip() for t in meta["allowed-tools"].split(",")]
-
-            # 使用字典赋值，同名技能会自动覆盖（实现优先级机制）
-            skills[name] = SkillDefinition(
-                name=name,
-                description=meta.get("description", ""),
-                when_to_use=meta.get("when_to_use") or meta.get("when-to-use", ""),
-                prompt_template=result.body,
-                user_invocable=user_invocable,
-                skill_dir=str(entry),
-                source=source,
-                context=context,
-                allowed_tools=allowed_tools,
-            )
-        except Exception:
-            pass
-
+        # 使用字典赋值，同名技能会自动覆盖（实现优先级机制）
+        skill = _parse_skill_file(skill_file, source, str(entry))
+        if skill:
+            skills[skill.name] = skill
 
 #### 注意什么
 
@@ -252,6 +263,8 @@ def execute_skill(
                 resolved = resolve_skill_prompt(skill, cmd_args)
                 print(f"  [cyan]ℹ Invoking skill: {skill.name}[/cyan]")
                 # 将解析后的模板作为 user message 注入 Agent 对话
+                # 注意：完整实现还需处理 fork 模式（派生子 Agent 执行技能）、异常捕获、
+                # 以及正确的命令匹配顺序（先匹配具体命令，再匹配通配符）。
                 await agent.chat(resolved)
                 continue
 

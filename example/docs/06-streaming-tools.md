@@ -68,7 +68,7 @@ import json                     # 步骤 2 的 _call_anthropic_stream 中需要 
 from tools import (
     tool_definitions,
     execute_tool,
-    get_tool_definitions,       # 获取工具定义列表
+    get_tool_definitions,       # 教学简化版，第 12 课起替换为 get_active_tool_definitions()
     CONCURRENCY_SAFE_TOOLS,     # 并发安全工具白名单，用于判断是否可以异步抢跑
 )
 from ui import print_tool_call, print_tool_result  # 工具调用的 UI 渲染（步骤 5 会用到）
@@ -147,7 +147,7 @@ response = await self._client.messages.create(
             # thinking 模式下使用动态上限，禁用时使用默认 16384
             "max_tokens": max_output if self.state.thinking_mode != "disabled" else 16384,
             "system": self._system_prompt,
-            "tools": get_tool_definitions(),
+            "tools": get_tool_definitions(),  # 教学简化版，参见第 12 课过渡说明
             "messages": self.history.anthropic_messages,
         }
 
@@ -370,7 +370,8 @@ async def _execute_tool_call(self, name: str, args: dict) -> str:
             # 将所有工具执行结果追加到历史，供下一轮对话使用
             self.history.append_tool_results(tool_results)
 
-        # 输出最终回复（临时方案，第 7 课会替换为流式字符渲染）
+        # 输出最终回复（临时方案，第 7 课实现流式文本输出后必须删除此段代码，
+        # 否则会导致双重输出——文本已在流式阶段实时渲染，此处会再次打印）
         for block in response.content:
             if block.type == "text":
                 print(block.text)

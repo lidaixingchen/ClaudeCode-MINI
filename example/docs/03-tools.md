@@ -248,11 +248,10 @@ def _run_shell(inp: dict) -> str:
             text=True,
             timeout=timeout_s,
         )
-        stdout = f"\nStdout:\n{result.stdout}" if result.stdout else ""
         stderr = f"\nStderr:\n{result.stderr}" if result.stderr else ""
         if result.returncode != 0:
             # 非零退出码——将 stderr 一起返回，错误信息通常在 stderr 中
-            return f"Command failed (exit code {result.returncode}){stdout}{stderr}"
+            return f"Command failed (exit code {result.returncode}){stderr}"
         return result.stdout or "(command succeeded with no output)"
     except subprocess.TimeoutExpired:
         return f"Command timed out after {inp.get('timeout', 30000)}ms"
@@ -350,7 +349,8 @@ def get_tool_definitions() -> list[dict]:
     return tool_definitions
 
 
-async def execute_tool(name: str, inp: dict) -> str:
+# read_file_state: mtime 防护——记录文件最后读取时间，防止并发读写冲突
+async def execute_tool(name: str, inp: dict, read_file_state: dict[str, float] | None = None) -> str:
     """工具分发器：根据名称路由到具体实现函数，并自动截断大结果"""
     handlers = {
         "list_files": _list_files,  # 第一课实现
@@ -512,3 +512,5 @@ Successfully edited test_edit.txt
 ---
 
 > **下一章**：工具定义了 Agent 的物理能力边界，而 System Prompt 则定义了它在面对这些工具时的行为准则。
+
+> **进阶特性预览**：完整源码中 `execute_tool` 还包含 `read_file_state` 参数（mtime 防护：确保文件先读后写）、工具延迟加载（`deferred` 标记）、以及权限系统（`check_permission`）。这些特性将在后续课程中逐一展开。

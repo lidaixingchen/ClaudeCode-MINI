@@ -1,4 +1,4 @@
-# 第 12 课：只读规划模式 (Plan Mode)
+﻿# 第 12 课：只读规划模式 (Plan Mode)
 
 ## 🎯 本节目标
 
@@ -253,7 +253,7 @@ class AgentState:
         1. 重新计算 self._system_prompt（内存副本）
         2. 调用 self.history.update_system_prompt() 同步到底层存储
         """
-        self._base_system_prompt = build_system_prompt()
+        self._base_system_prompt = self.config.custom_system_prompt or build_system_prompt()
         if self.config.permission_mode == "plan":
             if not self.state.plan_file_path:
                 self.state.plan_file_path = self._generate_plan_file_path()
@@ -381,7 +381,7 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
             # 从磁盘读取 Plan 文件内容
             plan_content = "(No plan file found)"
             if self.state.plan_file_path and Path(self.state.plan_file_path).exists():
-                plan_content = Path(self.state.plan_file_path).read_text()
+                plan_content = Path(self.state.plan_file_path).read_text(encoding="utf-8")
 
             # 如果注册了外部审批回调函数（多在 REPL 等交互场景）
             if self._plan_approval_fn:

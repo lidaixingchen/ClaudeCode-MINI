@@ -106,13 +106,13 @@ def is_dangerous(command: str) -> bool:
 # tools.py（续）
 
 
-def _load_settings(path: Path) -> dict | None:
+def _load_settings(file_path: Path) -> dict | None:
     """加载 JSON 配置文件，文件不存在或解析失败时返回 None。"""
-    if not path.exists():
+    if not file_path.exists():
         return None
     try:
         # 指定 UTF-8 编码避免非 ASCII 路径/内容的乱码问题
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(file_path.read_text(encoding="utf-8"))
     except Exception:
         return None
 
@@ -424,15 +424,14 @@ class Agent:
         self.confirm_fn = fn
 
     # 弹窗询问用户是否允许危险操作，返回 True/False
-    async def _confirm_dangerous(self, message: str) -> bool:
-        # 打印醒目的黄字警告，让用户明确感知风险
-        print(f"\n  [yellow]⚠ Dangerous action request: {message}[/yellow]")
+    async def _confirm_dangerous(self, command: str) -> bool:
+        print_confirmation(command)
+        if self.confirm_fn:
+            return await self.confirm_fn(command)
         try:
             answer = input("  Allow? (y/n): ")
-            # 用户输入以 y/Y 开头视为同意
-            return answer.strip().lower().startswith("y")
+            return answer.lower().startswith("y")
         except EOFError:
-            # 非交互环境（如管道输入）默认拒绝
             return False
 
     # ... 在 _chat_anthropic 的工具执行循环中修改为：
@@ -477,12 +476,12 @@ class Agent:
                 # 此处省略原有执行工具与 early_task 判断，直接调用 execute_tool ...
 ```
 
-同时，需要更新第 6 课中 `_on_tool_block_complete` 回调，添加权限检查：
+同时，需要更新第 6 课中 `_on_tool_block` 回调，添加权限检查：
 
 ```python
-# agent.py -> _chat_anthropic 中的 _on_tool_block_complete 回调
+# agent.py -> _chat_anthropic 中的 _on_tool_block 回调
 
-            def _on_tool_block_complete(block: dict):
+            def _on_tool_block(block: dict):
                 # 只有白名单中的只读工具才允许抢跑
                 if block["name"] in CONCURRENCY_SAFE_TOOLS:
                     # 权限检查：即使工具在白名单中，仍需验证用户是否授权

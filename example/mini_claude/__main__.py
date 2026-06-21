@@ -206,13 +206,19 @@ Options:
   --plan              Plan mode: read-only, describe changes without executing
   --accept-edits      Auto-approve file edits, still confirm dangerous shell
   --dont-ask          Auto-deny anything needing confirmation (for CI)
-  --thinking          Enable extended thinking (Anthropic only)
+  --thinking          Enable extended thinking (Claude auto-detect; 3rd-party via env)
   --model, -m         Model to use (default: claude-opus-4-6, or MODEL_NAME env)
   --api-base URL      Use OpenAI-compatible API endpoint (key via env var)
   --resume            Resume the last session
   --max-cost USD      Stop when estimated cost exceeds this amount
   --max-turns N       Stop after N agentic turns
   --help, -h          Show this help
+
+Environment variables for third-party models:
+  THINKING_MODE       enabled / adaptive / disabled (override auto-detection)
+  THINKING_EFFORT     low / medium / high / max (thinking depth, default: max)
+  MAX_OUTPUT_TOKENS   Max output tokens (e.g. 32768)
+  CONTEXT_WINDOW      Context window size (e.g. 131072)
 
 REPL commands:
   /clear              Clear conversation history

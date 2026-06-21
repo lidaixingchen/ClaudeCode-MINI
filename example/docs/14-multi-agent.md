@@ -1,4 +1,4 @@
-# 第 14 课：多 Agent 架构 (Multi-Agent)
+﻿# 第 14 课：多 Agent 架构 (Multi-Agent)
 
 ## 🎯 本节目标
 
@@ -233,11 +233,8 @@ logger = logging.getLogger(__name__)
     def __init__(
         self,
         *,
+        backend: BackendConfig,                  # 后端配置对象（包含 model、api_key、base_url 等）
         permission_mode: str = "default",
-        model: str = "claude-opus-4-6",
-        api_base: str | None = None,
-        anthropic_base_url: str | None = None,
-        api_key: str | None = None,
         thinking: bool = False,
         max_cost_usd: float | None = None,
         max_turns: int | None = None,
@@ -246,13 +243,12 @@ logger = logging.getLogger(__name__)
         custom_tools: list[dict] | None = None,    # 子代理裁剪后的工具集
         is_sub_agent: bool = False,                # 标识是否为子代理（影响输出捕获与 MCP 初始化）
     ):
+        # 保存后端配置对象，子代理创建时直接透传
+        self.backend = backend
+
         # 封装至统一的 AgentConfig 中
         self.config = AgentConfig(
             permission_mode=permission_mode,
-            model=model,
-            api_base=api_base,
-            anthropic_base_url=anthropic_base_url,
-            api_key=api_key,
             thinking=thinking,
             max_cost_usd=max_cost_usd,
             max_turns=max_turns,
@@ -357,10 +353,7 @@ Token 消耗要使用增量计算（`self.state.total_input_tokens - prev_in`）
 
         config = get_sub_agent_config(agent_type)
         sub_agent = Agent(
-            model=self.backend.model,
-            # 继承父 Agent 的 API 后端地址（如 aihubmix 中转），否则子代理会路由到默认 Anthropic 端点
-            api_base=str(self.backend.base_url) if self.use_openai else None,
-            anthropic_base_url=str(self.backend.base_url) if not self.use_openai else None,
+            backend=self.backend,
             custom_system_prompt=config["system_prompt"],
             custom_tools=config["tools"],
             is_sub_agent=True,
@@ -421,9 +414,9 @@ Token 消耗要使用增量计算（`self.state.total_input_tokens - prev_in`）
 * **陷阱**：如果在子代理的构造阶段，直接尝试使用 `self.is_sub_agent = True` 进行状态标识，Python 会抛出 `AttributeError: can't set attribute` 错误导致初始化失败。
 * **解决方案**：记住在 Python 中带有 `@property` 装饰器的函数都是只读的。我们必须将真实状态存储在 `self.config` 中，并在 property 函数中通过 `return self.config.is_sub_agent` 来提供读取接口。
 
-### 2. 子代理未继承 `api_base`
-* **陷阱**：如果学员在实现子代理实例化时，遗漏了 `api_base` 的透传，当用户通过中转节点（如 `aihubmix.com`）使用自定义 OpenAI 后端运行 `mini-claude` 时，子代理在后台会被直接路由至官方向外请求，导致服务阻断。
-* **解决方案**：实例化时务必增加以下继承：`api_base=str(self.backend.base_url) if self.use_openai else None`。
+### 2. 子代理未继承 `backend` 配置
+* **陷阱**：如果学员在实现子代理实例化时，遗漏了 `backend` 的透传，当用户通过中转节点（如 `aihubmix.com`）使用自定义 OpenAI 后端运行 `mini-claude` 时，子代理在后台会被直接路由至官方向外请求，导致服务阻断。
+* **解决方案**：实例化时务必透传完整的后端配置对象：`backend=self.backend`。`BackendConfig` 已包含 `api_key`、`base_url` 等全部连接信息，无需单独传递。
 
 ---
 

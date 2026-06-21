@@ -355,7 +355,7 @@ async def _chat_anthropic(self, user_message: str) -> None:
             model=self.backend.model,
             max_tokens=4096,
             system=current_system_prompt,  # 传入编译后的提示词
-            tools=get_tool_definitions(),
+            tools=get_tool_definitions(),  # 教学简化版，第 12 课起替换为 get_active_tool_definitions()
             messages=self.history.anthropic_messages,
         )
         # ... 后续逻辑保持不变
@@ -373,7 +373,7 @@ async def _chat_openai(self, user_message: str) -> None:
         response = await self._client.chat.completions.create(
             model=self.backend.model,
             messages=self.history.openai_messages,  # 统一由 history 管理
-            tools=_to_openai_tools(get_tool_definitions()),
+            tools=_to_openai_tools(get_tool_definitions()),  # 同上，教学简化版
         )
         # ... 后续逻辑保持不变
 ```

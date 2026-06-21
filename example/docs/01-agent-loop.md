@@ -77,6 +77,9 @@ from anthropic.types import MessageParam, ToolUseBlockParam, TextBlockParam, Too
 from anthropic.types.tool_param import ToolParam
 from dotenv import load_dotenv
 from tools import execute_tool, get_tool_definitions
+# 注意：教程使用绝对导入（from tools import ...）以简化教学，
+# 源码中统一使用相对导入（from .tools import ...）。
+# 如果你将代码组织为 Python 包结构，请切换为相对导入。
 
 # 加载 .env 文件中的环境变量（如 ANTHROPIC_API_KEY）
 load_dotenv()
@@ -85,7 +88,7 @@ load_dotenv()
 @dataclass
 class AgentConfig:
     """Agent 的静态配置，运行期间保持不变"""
-    model: str = "claude-sonnet-4-6"  # 默认使用的 LLM 模型
+    model: str = "claude-opus-4-6"  # 默认使用的 LLM 模型
 
 
 @dataclass
@@ -101,6 +104,8 @@ class Agent:
         self._client = anthropic.AsyncAnthropic()  # 异步 Anthropic API 客户端
         self._messages: list[MessageParam] = []  # 消息历史：Agent 的工作记忆
 ```
+
+> **过渡说明**：本阶段的 `AgentConfig` 持有 `model` 字段以简化教学。第 2 课引入 `BackendConfig` 后，模型配置将迁移到 `BackendConfig`，`AgentConfig` 不再持有后端相关字段。
 
 #### 配置 API 密钥
 
@@ -191,7 +196,7 @@ Agent：用户问 → LLM 决定调用工具 → 执行工具 → 结果喂回 L
                 model=self.config.model,
                 max_tokens=4096,
                 system="You are a helpful coding assistant with access to tools.",
-                tools=cast(list[ToolParam], get_tool_definitions()),  # 从 tools.py 导入
+                tools=cast(list[ToolParam], get_tool_definitions()),  # cast 仅用于类型提示，运行时不做任何转换，告诉类型检查器返回值是 list[ToolParam]  # 从 tools.py 导入
                 messages=self._messages,
             )
 
@@ -316,21 +321,24 @@ async def execute_tool(name: str, inp: dict) -> str:
 
 def _list_files(inp: dict) -> str:
     """列出目录下匹配 glob 模式的文件"""
-    base = Path(inp.get("path") or ".")
-    pattern = inp["pattern"]
-    files = []
-    for p in base.glob(pattern):
-        if p.is_file():
-            rel = str(p.relative_to(base) if base != Path(".") else p)
-            # 跳过 node_modules 和 .git，避免返回垃圾结果
-            if "node_modules" in rel or ".git" in rel.split(os.sep):
-                continue
-            files.append(rel)
-            if len(files) >= MAX_LIST_FILES:
-                break  # 达到上限立即停止，避免不必要的遍历
-    if not files:
-        return "No files found matching the pattern."
-    return "\n".join(files[:MAX_LIST_FILES])
+    try:
+        base = Path(inp.get("path") or ".")
+        pattern = inp["pattern"]
+        files = []
+        for p in base.glob(pattern):
+            if p.is_file():
+                rel = str(p.relative_to(base) if base != Path(".") else p)
+                # 跳过 node_modules 和 .git，避免返回垃圾结果
+                if "node_modules" in rel or ".git" in rel.split(os.sep):
+                    continue
+                files.append(rel)
+                if len(files) >= MAX_LIST_FILES:
+                    break  # 达到上限立即停止，避免不必要的遍历
+        if not files:
+            return "No files found matching the pattern."
+        return "\n".join(files[:MAX_LIST_FILES])
+    except Exception as e:
+        return f"Error listing files: {e}"
 ```
 
 工具定义的结构是 **Anthropic Tool Use 协议**要求的格式：

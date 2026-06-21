@@ -148,11 +148,7 @@ def get_latest_session_id() -> str | None:
 # MessageHistory 类中新增的方法
 
 def message_count(self) -> int:
-    """返回消息总数（不含系统提示词）"""
-    if self.use_openai:
-        # OpenAI 模式下减去首条系统消息
-        return len(self._openai_messages) - 1
-    return len(self._anthropic_messages)
+    return len(self.messages)
 
 def to_dict(self) -> dict[str, list[dict]]:
     """将消息历史序列化为字典，用于会话持久化"""
@@ -169,14 +165,11 @@ def restore(self, data: dict[str, list[dict]]) -> None:
         self._openai_messages = data["openaiMessages"]
 
 def clear(self, keep_system: bool = True) -> None:
-    """清空消息历史"""
-    self._anthropic_messages.clear()
-    if keep_system and self.use_openai:
-        # 保留系统提示词
-        self._openai_messages.clear()
+    """清除历史记录。如果 keep_system 为 True，则为 OpenAI 保留 system prompt。"""
+    self._anthropic_messages = []
+    self._openai_messages = []
+    if self.use_openai and keep_system:
         self._openai_messages.append({"role": "system", "content": self.system_prompt})
-    else:
-        self._openai_messages.clear()
 ```
 
 然后，修改 `Agent` 类：

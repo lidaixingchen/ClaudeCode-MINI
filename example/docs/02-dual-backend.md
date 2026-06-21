@@ -69,6 +69,8 @@ Mini Claude Code 已启动！输入 'exit' 退出。
 
 ## 🚀 开始实现
 
+> **建议阅读顺序**：如果你更熟悉 Anthropic API，可以先看步骤 2（Anthropic 流式）再看步骤 1（OpenAI 循环）。入口分发函数 `_chat` 是两端的统一调度点。
+
 ### 步骤 1：引入 `BackendConfig` 工厂模式
 
 #### 为什么做
@@ -97,7 +99,7 @@ class BackendConfig:
     provider: Literal["anthropic", "openai"]
     api_key: str
     base_url: str | None = None
-    model: str = "claude-sonnet-4-6"
+    model: str = "claude-opus-4-6"
 
     @classmethod
     def from_env(cls, model: str | None = None, api_base_override: str | None = None) -> "BackendConfig":
@@ -112,7 +114,7 @@ class BackendConfig:
                        base_url=os.environ["OPENAI_BASE_URL"], model=model or "gpt-4o")
         if os.environ.get("ANTHROPIC_API_KEY"):
             return cls(provider="anthropic", api_key=os.environ["ANTHROPIC_API_KEY"],
-                       base_url=os.environ.get("ANTHROPIC_BASE_URL"), model=model or "claude-sonnet-4-6")
+                       base_url=os.environ.get("ANTHROPIC_BASE_URL"), model=model or "claude-opus-4-6")
         if os.environ.get("OPENAI_API_KEY"):
             return cls(provider="openai", api_key=os.environ["OPENAI_API_KEY"],
                        base_url=os.environ.get("OPENAI_BASE_URL"), model=model or "gpt-4o")
@@ -271,6 +273,8 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
 ```python
 # agent.py（续）
 
+import json
+
     async def _chat_openai(self, user_message: str) -> None:
         """OpenAI 兼容后端的 Agent Loop"""
         # 1. 用户消息推入历史
@@ -306,7 +310,6 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
                 break
 
             # 5. 执行工具并将结果（role: "tool"）推入历史
-            import json
             tool_results = []
             for tc in message.tool_calls:
                 # arguments 是 JSON 字符串，需要解析为 dict
@@ -364,7 +367,7 @@ OpenAI API 的消息流与 Anthropic 存在两个关键协议差异：
             response = await self._client.messages.create(
                 model=self.backend.model,
                 max_tokens=4096,
-                system="You are a helpful coding assistant with access to tools.",
+                system="You are a helpful coding assistant with access to tools.",  # 过渡阶段：后续课程将改为 self._system_prompt
                 tools=get_tool_definitions(),
                 messages=self.history.anthropic_messages,
             )
@@ -444,7 +447,7 @@ async def main():
     """程序入口：读取环境变量，自动选择后端并启动 Agent"""
     query = sys.argv[1] if len(sys.argv) > 1 else "列出当前目录下所有 .py 文件"
 
-    model = os.environ.get("MODEL_NAME") or "claude-sonnet-4-6"
+    model = os.environ.get("MODEL_NAME") or "claude-opus-4-6"
     backend = BackendConfig.from_env(model=model)
     agent = Agent(backend=backend)
     await agent._chat(query)
@@ -487,7 +490,7 @@ load_dotenv()
 
 async def main():
     """程序入口：多轮对话模式"""
-    model = os.environ.get("MODEL_NAME") or "claude-sonnet-4-6"
+    model = os.environ.get("MODEL_NAME") or "claude-opus-4-6"
     backend = BackendConfig.from_env(model=model)
     agent = Agent(backend=backend)
 
@@ -673,7 +676,7 @@ response = await self._client.chat.completions.create(
 )
 ```
 
-**修正**：在请求时动态将系统提示词拼装在 `messages` 列表 the 第 0 位：`messages=[system_prompt] + self._messages`。
+**修正**：在请求时动态将系统提示词拼装在 `messages` 列表的第 0 位：`messages=[system_prompt] + self._messages`。
 
 ---
 
@@ -731,7 +734,7 @@ Mini Claude Code 已启动！输入 'exit' 退出。
    *(提示：OpenAI 要求 `role: "tool"` 消息必须单独存在，并使用 `tool_call_id` 与具体的调用进行平级关联。)*
 
 2. **如果在单轮循环中模型决定同时调用 3 个工具，OpenAI 协议的历史中会增加多少条消息？**
-   *(提示：1 条带 3 个 tool_calls 的 assistant 消息 + 3 条单独 the tool 消息 = 共 4 条消息。)*
+   *(提示：1 条带 3 个 tool_calls 的 assistant 消息 + 3 条单独的 tool 消息 = 共 4 条消息。)*
 
 3. **为什么需要 `MessageHistory` 抽象层？直接在 Agent 中维护 `_anthropic_messages` 和 `_openai_messages` 两个数组不行吗？**
    *(提示：抽象层封装了两种协议的差异（如 `append_tool_results` 的实现不同），让 Agent 的业务逻辑（`_chat_anthropic`、`_chat_openai`）不用关心底层协议细节。如果直接操作数组，每次修改协议逻辑都要改动两处代码，容易遗漏导致 Bug。)*

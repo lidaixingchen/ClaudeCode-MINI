@@ -80,35 +80,121 @@ MODEL_CONTEXT = {
 
 
 def _get_context_window(model: str) -> int:
+    """获取模型的上下文窗口大小。支持 CONTEXT_WINDOW 环境变量覆盖。"""
+    env_val = os.environ.get("CONTEXT_WINDOW")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
     return MODEL_CONTEXT.get(model, 200000)
 
 
 # ─── Thinking support detection ─────────────────────────────
 
+# 已知支持推理/思考的第三方模型关键词（小写）
+_THINKING_MODEL_KEYWORDS = ("deepseek-r1", "qwq", "grok-3", "reasoning", "think")
+
 
 def _model_supports_thinking(model: str) -> bool:
+    """判断模型是否支持 Extended Thinking（思考链）功能。
+
+    检测优先级：
+    1. Claude 模型硬编码（已知型号自动识别）
+    2. THINKING_MODE 环境变量显式覆盖（第三方模型推荐方式）
+    3. 关键词启发式匹配（deepseek-r1、qwq 等）
+    4. 默认返回 False（安全回退）
+    """
     m = model.lower()
+    # 1. Claude 3 系列明确不支持 thinking
     if "claude-3-" in m or "3-5-" in m or "3-7-" in m:
         return False
+    # 2. Claude 4+ 支持
     if "claude" in m and any(x in m for x in ("opus", "sonnet", "haiku")):
         return True
-    return False
+    # 3. 第三方模型：环境变量显式覆盖（最高优先级）
+    env_override = os.environ.get("THINKING_MODE", "").lower()
+    if env_override in ("enabled", "adaptive"):
+        return True
+    if env_override == "disabled":
+        return False
+    # 4. 第三方模型：关键词启发式匹配
+    return any(kw in m for kw in _THINKING_MODEL_KEYWORDS)
 
 
 def _model_supports_adaptive_thinking(model: str) -> bool:
+    """判断模型是否支持自适应思考模式（可动态调整思考深度）。
+
+    仅 Claude opus-4-6 / sonnet-4-6 原生支持。
+    第三方模型需显式设置 THINKING_MODE=adaptive 才会启用。
+    """
     m = model.lower()
-    return "opus-4-6" in m or "sonnet-4-6" in m
+    # Claude 已知型号
+    if "opus-4-6" in m or "sonnet-4-6" in m:
+        return True
+    # 第三方：环境变量显式指定 adaptive 时信任用户
+    return os.environ.get("THINKING_MODE", "").lower() == "adaptive"
 
 
 def _get_max_output_tokens(model: str) -> int:
+    """根据模型版本返回最大输出 Token 数。
+
+    Claude 模型使用硬编码值；第三方模型通过 MAX_OUTPUT_TOKENS 环境变量覆盖。
+    """
     m = model.lower()
+    # Claude 系列硬编码
     if "opus-4-6" in m:
         return 64000
     if "sonnet-4-6" in m:
         return 32000
     if any(x in m for x in ("opus-4", "sonnet-4", "haiku-4")):
         return 32000
+    # 第三方模型：环境变量覆盖（如 MAX_OUTPUT_TOKENS=65536）
+    env_val = os.environ.get("MAX_OUTPUT_TOKENS")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
     return 16384
+
+
+# 思考强度级别 → 占 max_output 的比例
+_THINKING_EFFORT_RATIOS: dict[str, float] = {
+    "low": 0.10,       # 10% — 快速浅层推理，适合简单任务
+    "medium": 0.30,    # 30% — 中等深度推理
+    "high": 0.60,      # 60% — 深度推理，适合复杂任务
+    "max": 1.00,       # 100% — 最大推理深度，几乎全部 token 留给思考
+}
+
+
+def _get_thinking_budget(model: str, max_output: int) -> int:
+    """获取思考链的 token 预算。
+
+    优先级：
+    1. THINKING_EFFORT 环境变量（语义化级别：low / medium / high / max）
+    2. THINKING_BUDGET 环境变量（原始 token 数，保留向后兼容）
+    3. 默认 max（全部 token 留给思考）
+    预算值会被钳制到 [1024, max_output - 1] 范围内。
+    """
+    # 1. 语义化思考强度（优先）
+    effort = os.environ.get("THINKING_EFFORT", "").lower()
+    if effort in _THINKING_EFFORT_RATIOS:
+        ratio = _THINKING_EFFORT_RATIOS[effort]
+        budget = int(max_output * ratio)
+        return max(1024, min(budget, max_output - 1))
+
+    # 2. 原始 token 数（向后兼容）
+    env_val = os.environ.get("THINKING_BUDGET")
+    if env_val:
+        try:
+            requested = int(env_val)
+            return max(1024, min(requested, max_output - 1))
+        except ValueError:
+            pass
+
+    # 3. 默认最大值
+    return max_output - 1
 
 
 # ─── Convert tools to OpenAI format ─────────────────────────
@@ -1229,7 +1315,8 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
             }
 
             if self.state.thinking_mode in ("adaptive", "enabled"):
-                create_params["thinking"] = {"type": "enabled", "budget_tokens": max_output - 1}
+                budget = _get_thinking_budget(self.backend.model, max_output)
+                create_params["thinking"] = {"type": "enabled", "budget_tokens": budget}
 
             first_text = True
             tool_blocks_by_index: dict[int, dict] = {}
@@ -1412,16 +1499,28 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
 
     async def _call_openai_stream(self) -> Any:
         async def _do():
-            stream = await self._client.chat.completions.create(
-                model=self.backend.model,
-                tools=_to_openai_tools(get_active_tool_definitions(self.tools)),  # type: ignore[arg-type]
-                messages=self.history.openai_messages,  # type: ignore[arg-type]
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+            # 构建请求参数
+            create_params: dict[str, Any] = {
+                "model": self.backend.model,
+                "tools": _to_openai_tools(get_active_tool_definitions(self.tools)),  # type: ignore[arg-type]
+                "messages": self.history.openai_messages,  # type: ignore[arg-type]
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+
+            # 思考模式：通过 extra_body 传递 thinking 参数，通过 reasoning_effort 控制强度
+            if self.state.thinking_mode != "disabled":
+                create_params["reasoning_effort"] = os.environ.get(
+                    "THINKING_EFFORT", "high"
+                ).lower()
+                create_params["extra_body"] = {"thinking": {"type": "enabled"}}
+
+            stream = await self._client.chat.completions.create(**create_params)
 
             content = ""
+            reasoning_content = ""  # DeepSeek 等模型的思维链内容
             first_text = True
+            reasoning_started = False  # 标记是否已开始输出思维链
             tool_calls: dict[int, dict] = {}
             finish_reason = ""
             usage = None
@@ -1437,6 +1536,18 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
                     continue
                 delta = chunk.choices[0].delta
 
+                # 1. 处理思维链内容（reasoning_content）
+                # DeepSeek 等模型通过 delta.reasoning_content 逐步推送思维链
+                if delta and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                    if not reasoning_started:
+                        stop_spinner()
+                        self._emit_text("\n  [thinking] ")
+                        reasoning_started = True
+                        first_text = False  # 思考开始后，后续 text 不再触发首字逻辑
+                    self._emit_text(delta.reasoning_content)
+                    reasoning_content += delta.reasoning_content
+
+                # 2. 处理正文输出文本
                 if delta and delta.content:
                     if first_text:
                         stop_spinner()
@@ -1445,6 +1556,7 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
                     self._emit_text(delta.content)
                     content += delta.content
 
+                # 3. 收集与累加工具调用参数分片
                 if delta and delta.tool_calls:
                     for tc in delta.tool_calls:
                         existing = tool_calls.get(tc.index)
@@ -1468,13 +1580,18 @@ IMPORTANT: When your plan is complete, you MUST call exit_plan_mode. Do NOT ask 
                     for _, tc in sorted(tool_calls.items())
                 ]
 
+            # 构建返回消息体，包含 reasoning_content（如有）
+            message: dict[str, Any] = {
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": assembled,
+            }
+            if reasoning_content:
+                message["reasoning_content"] = reasoning_content
+
             return {
                 "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": content or None,
-                        "tool_calls": assembled,
-                    },
+                    "message": message,
                     "finish_reason": finish_reason or "stop",
                 }],
                 "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0},

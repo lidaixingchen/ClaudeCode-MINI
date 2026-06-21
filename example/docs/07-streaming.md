@@ -81,42 +81,140 @@ if message.content:
 ```python
 # agent.py 中的修改
 
+import os
+
+# 已知支持推理/思考的第三方模型关键词（小写）
+_THINKING_MODEL_KEYWORDS = ("deepseek-r1", "qwq", "grok-3", "reasoning", "think")
+
 
 def _model_supports_thinking(model: str) -> bool:
-    """判断模型是否支持 Extended Thinking（思考链）功能。"""
+    """判断模型是否支持 Extended Thinking（思考链）功能。
+
+    检测优先级：
+    1. Claude 模型硬编码（已知型号自动识别）
+    2. THINKING_MODE 环境变量显式覆盖（第三方模型推荐方式）
+    3. 关键词启发式匹配（deepseek-r1、qwq 等）
+    4. 默认返回 False（安全回退）
+    """
     m = model.lower()
-    # Claude 3 系列不支持 thinking，只有更新的 4 系列才支持
+    # 1. Claude 3 系列明确不支持 thinking
     if "claude-3-" in m or "3-5-" in m or "3-7-" in m:
         return False
+    # 2. Claude 4+ 支持
     if "claude" in m and any(x in m for x in ("opus", "sonnet", "haiku")):
         return True
-    return False
+    # 3. 第三方模型：环境变量显式覆盖（最高优先级）
+    env_override = os.environ.get("THINKING_MODE", "").lower()
+    if env_override in ("enabled", "adaptive"):
+        return True
+    if env_override == "disabled":
+        return False
+    # 4. 第三方模型：关键词启发式匹配
+    return any(kw in m for kw in _THINKING_MODEL_KEYWORDS)
 
 
 def _model_supports_adaptive_thinking(model: str) -> bool:
-    """判断模型是否支持自适应思考模式（可动态调整思考深度）。"""
+    """判断模型是否支持自适应思考模式（可动态调整思考深度）。
+
+    仅 Claude opus-4-6 / sonnet-4-6 原生支持。
+    第三方模型需显式设置 THINKING_MODE=adaptive 才会启用。
+    """
     m = model.lower()
-    # 仅 opus-4-6 和 sonnet-4-6 支持自适应思考
-    return "opus-4-6" in m or "sonnet-4-6" in m
+    # Claude 已知型号
+    if "opus-4-6" in m or "sonnet-4-6" in m:
+        return True
+    # 第三方：环境变量显式指定 adaptive 时信任用户
+    return os.environ.get("THINKING_MODE", "").lower() == "adaptive"
 
 
 def _get_max_output_tokens(model: str) -> int:
-    """根据模型版本返回最大输出 Token 数，避免超出上下文窗口限制。"""
+    """根据模型版本返回最大输出 Token 数。
+
+    Claude 模型使用硬编码值；第三方模型通过 MAX_OUTPUT_TOKENS 环境变量覆盖。
+    """
     m = model.lower()
+    # Claude 系列硬编码
     if "opus-4-6" in m:
         return 64000  # 最新旗舰模型有更大输出空间
     if "sonnet-4-6" in m:
         return 32000
     if any(x in m for x in ("opus-4", "sonnet-4", "haiku-4")):
         return 32000
+    # 第三方模型：环境变量覆盖（如 MAX_OUTPUT_TOKENS=65536）
+    env_val = os.environ.get("MAX_OUTPUT_TOKENS")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
     return 16384  # 默认回退值
 
+
+# 思考强度级别 → 占 max_output 的比例
+_THINKING_EFFORT_RATIOS: dict[str, float] = {
+    "low": 0.10,       # 10% — 快速浅层推理，适合简单任务
+    "medium": 0.30,    # 30% — 中等深度推理
+    "high": 0.60,      # 60% — 深度推理，适合复杂任务
+    "max": 1.00,       # 100% — 最大推理深度，几乎全部 token 留给思考
+}
+
+
+def _get_thinking_budget(model: str, max_output: int) -> int:
+    """获取思考链的 token 预算。
+
+    优先级：
+    1. THINKING_EFFORT 环境变量（语义化级别：low / medium / high / max）
+    2. THINKING_BUDGET 环境变量（原始 token 数，保留向后兼容）
+    3. 默认 max（全部 token 留给思考）
+    预算值会被钳制到 [1024, max_output - 1] 范围内。
+    """
+    # 1. 语义化思考强度（优先）
+    effort = os.environ.get("THINKING_EFFORT", "").lower()
+    if effort in _THINKING_EFFORT_RATIOS:
+        ratio = _THINKING_EFFORT_RATIOS[effort]
+        budget = int(max_output * ratio)
+        return max(1024, min(budget, max_output - 1))
+
+    # 2. 原始 token 数（向后兼容）
+    env_val = os.environ.get("THINKING_BUDGET")
+    if env_val:
+        try:
+            requested = int(env_val)
+            return max(1024, min(requested, max_output - 1))
+        except ValueError:
+            pass
+
+    # 3. 默认最大值
+    return max_output - 1
+```
 
 #### 注意什么
 
 - **模型版本识别**：`_model_supports_thinking` 函数通过字符串匹配来识别模型版本。Claude 3 系列（如 claude-3-opus、claude-3.5-sonnet）不支持 thinking，而更新的版本（如 claude-4-opus、claude-4-sonnet）则支持。
 - **自适应思考**：只有最新的 opus-4-6 和 sonnet-4-6 版本支持自适应思考模式，这种模式可以动态调整思考深度。
 - **Token 限制策略**：不同模型的上下文窗口大小不同，因此需要根据模型版本设置合理的输出 Token 上限，避免请求失败。
+- **思考强度（Thinking Effort）**：`_get_thinking_budget` 函数控制思考链的 token 预算。支持两种调节方式：
+  - **`THINKING_EFFORT`**（推荐）：语义化级别，可选 `low`（10%）、`medium`（30%）、`high`（60%）、`max`（100%），直观易用
+  - **`THINKING_BUDGET`**（高级）：直接指定 token 数，保留向后兼容
+  - 预算值会被钳制到 `[1024, max_output - 1]` 范围内。对于第三方推理模型，使用 `low` 或 `medium` 可以降低延迟和成本
+- **第三方模型支持**：OpenAI 兼容后端的模型名是无限开放的，不可能穷举所有型号。因此我们采用**三层检测策略**：
+  1. **Claude 硬编码**（自动识别）：已知的 Claude 型号直接匹配
+  2. **环境变量覆盖**（推荐方式）：通过 `THINKING_MODE`、`THINKING_EFFORT`、`MAX_OUTPUT_TOKENS`、`CONTEXT_WINDOW` 等环境变量，用户显式声明第三方模型的能力
+  3. **关键词启发式匹配**（兜底）：对 `deepseek-r1`、`qwq`、`grok-3` 等已知推理模型做关键词匹配
+- **第三方模型使用示例**：
+
+  ```bash
+  # DeepSeek R1 推理模型（最大思考深度）
+  export THINKING_MODE=enabled
+  export THINKING_EFFORT=max
+  export MAX_OUTPUT_TOKENS=32768
+  python __main__.py --model deepseek-r1 --api-base https://api.deepseek.com/v1
+
+  # QwQ 推理模型（浅层思考，降低延迟和成本）
+  export THINKING_MODE=enabled
+  export THINKING_EFFORT=low
+  python __main__.py --model qwq-32b --api-base https://api.openai.com/v1
+  ```
 
 ---
 
@@ -189,8 +287,9 @@ Anthropic API 的流式响应会混杂输出 `text` 块和 `thinking` 块。
 
             # 根据 thinking_mode 决定是否启用 Extended Thinking
             if self.state.thinking_mode in ("adaptive", "enabled"):
-                # 预留一个 token 差值给思考块，避免超出限制
-                create_params["thinking"] = {"type": "enabled", "budget_tokens": max_output - 1}
+                # 使用 _get_thinking_budget 获取预算，支持 THINKING_BUDGET 环境变量调节
+                budget = _get_thinking_budget(self.backend.model, max_output)
+                create_params["thinking"] = {"type": "enabled", "budget_tokens": budget}
 
             tool_blocks_by_index: dict[int, dict] = {}  # 按索引跟踪工具块的累积状态
             first_text = True  # 标记是否为首个有效文本，用于控制 spinner 停止时机
@@ -283,17 +382,29 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
 async def _call_openai_stream(self) -> dict:
     """OpenAI 后端流式调用：处理增量分片并实时渲染文本。"""
     async def _do():
-        # 启动 OpenAI 兼容端流式生成（include_usage 让最后一个 chunk 携带 token 统计）
-        stream = await self._client.chat.completions.create(
-            model=self.backend.model,
-            messages=self.history.openai_messages,
-            tools=_to_openai_tools(get_tool_definitions()),
-            stream=True,
-            stream_options={"include_usage": True},  # 要求返回 token 用量统计
-        )
+        # 构建请求参数
+        create_params: dict[str, Any] = {
+            "model": self.backend.model,
+            "tools": _to_openai_tools(get_tool_definitions()),
+            "messages": self.history.openai_messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},  # 要求返回 token 用量统计
+        }
+
+        # 思考模式：通过 extra_body 传递 thinking 参数，通过 reasoning_effort 控制强度
+        if self.state.thinking_mode != "disabled":
+            create_params["reasoning_effort"] = os.environ.get(
+                "THINKING_EFFORT", "high"
+            ).lower()
+            create_params["extra_body"] = {"thinking": {"type": "enabled"}}
+
+        # 启动 OpenAI 兼容端流式生成
+        stream = await self._client.chat.completions.create(**create_params)
 
         content = ""  # 累积完整的回复文本
+        reasoning_content = ""  # DeepSeek 等模型的思维链内容
         first_text = True  # 标记首个文本到达，用于控制 spinner 停止
+        reasoning_started = False  # 标记是否已开始输出思维链
         tool_calls: dict[int, dict] = {}  # 按索引累积工具调用参数
         finish_reason = ""
         usage = None  # 用于记录最后一个 chunk 返回的 token 用量
@@ -310,7 +421,18 @@ async def _call_openai_stream(self) -> dict:
                 continue
             delta = chunk.choices[0].delta
 
-            # 1. 处理正文输出文本，并进行流式刷新
+            # 1. 处理思维链内容（reasoning_content）
+            # DeepSeek 等模型通过 delta.reasoning_content 逐步推送思维链
+            if delta and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                if not reasoning_started:
+                    stop_spinner()
+                    self._emit_text("\n  [thinking] ")
+                    reasoning_started = True
+                    first_text = False  # 思考开始后，后续 text 不再触发首字逻辑
+                self._emit_text(delta.reasoning_content)
+                reasoning_content += delta.reasoning_content
+
+            # 2. 处理正文输出文本，并进行流式刷新
             if delta and delta.content:
                 if first_text:
                     stop_spinner()
@@ -319,7 +441,7 @@ async def _call_openai_stream(self) -> dict:
                 self._emit_text(delta.content)
                 content += delta.content  # 累积完整文本用于历史记录
 
-            # 2. 收集与累加工具调用参数分片
+            # 3. 收集与累加工具调用参数分片
             # OpenAI 的 tool_calls 被打碎成极小的 delta 片段，需要手动拼装
             if delta and delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -354,15 +476,20 @@ async def _call_openai_stream(self) -> dict:
             else None
         )
 
+        # 构建返回消息体，包含 reasoning_content（如有）
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": content or None,
+            "tool_calls": assembled,
+        }
+        if reasoning_content:
+            message["reasoning_content"] = reasoning_content
+
         # 返回统一的数据包供外层主循环更新历史
         return {
             "choices": [
                 {
-                    "message": {
-                        "role": "assistant",
-                        "content": content or None,
-                        "tool_calls": assembled,
-                    },
+                    "message": message,
                     "finish_reason": finish_reason or "stop",
                 }
             ],
@@ -378,6 +505,11 @@ async def _call_openai_stream(self) -> dict:
   1. 对于 **Anthropic 后端**：在 `_call_anthropic_stream` 结束后，通过 `self.history.append_assistant_message()` 添加。
   2. 对于 **OpenAI 后端**：在 `_call_openai_stream` 收集完文本和 `tool_calls` 后，通过 `self.history.append_assistant_message()` 添加带有 `tool_calls` 的回复。如果是字典格式，抽象层会直接推入，防止将其包装在多余的 `assistant` 属性中导致 OpenAI API 抛出 400 Bad Request。
 - **模块级函数调用**：注意 `_to_openai_tools` 是一个模块级工具函数，调用时不需要加上 `self.` 前缀。
+- **思考模式 API 参数**：对于 OpenAI 兼容后端（如 DeepSeek），思考模式通过两个参数传递：
+  - `reasoning_effort`：控制思考强度，可选 `low` / `medium` / `high` / `max`，通过 `THINKING_EFFORT` 环境变量设置，默认 `high`
+  - `extra_body={"thinking": {"type": "enabled"}}`：启用思考模式的开关
+  - 注意：这两个参数需要通过 `extra_body` 传递，因为 OpenAI SDK 的标准参数中没有 `thinking` 字段
+- **思维链内容处理**：DeepSeek 等模型通过 `delta.reasoning_content` 逐步推送思维链内容，与 `delta.content`（正文）同级。我们在流式渲染时先显示 `[thinking]` 标记，再逐字输出思维链，最后输出正文
 ```
 
 ---
