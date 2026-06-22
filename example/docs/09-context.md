@@ -217,12 +217,11 @@ class Agent:
         # ✅ 使用 MessageHistory 公共方法进行安全替换
         self.history.replace_openai_messages(new_messages)
         self.state.last_input_token_count = 0
-
+```
 
 #### 注意什么
 
 - **摘要指令生成**：摘要生成请求属于高爆炸半径操作。如果我们在请求中允许大模型随意发散，可能会遗漏关键的文件编辑或运行结果。因此，摘要提示词应极力强调整理”发生了什么”、”编辑了哪些文件”以及”命令运行的最终产出”，保证压缩后的极简上下文没有信息丢失。
-```
 
 ---
 
@@ -563,12 +562,11 @@ class Agent:
                 # 捕获异常避免网络故障导致 REPL 闪退
                 print(f"  [red]Error: {e}[/red]")
             continue
-
+```
 
 #### 注意什么
 
 - **异常拦截**：手动压缩指令 `/compact` 在 REPL 中以独立控制台命令执行。必须加 `try...except` 拦截异常，避免因为云端限流等网络偶发失败导致交互终端闪退。
-```
 
 ---
 

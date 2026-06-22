@@ -81,12 +81,11 @@ def is_dangerous(command: str) -> bool:
     """静态扫描命令是否匹配危险模式（作为第一层防护）。"""
     # 只要命中任意正则，即标记为危险
     return any(p.search(command) for p in DANGEROUS_PATTERNS)
-
+```
 
 #### 注意什么
 
 - **正则局限性**：静态扫描危险命令仅是辅助第一层防护，大模型或用户可能有各种方式绕过正则，真正的防线在后续的白名单规则匹配和交互确认。
-```
 
 ---
 
@@ -181,12 +180,11 @@ def _matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
         return value.startswith(pattern[:-1])
     # 精确匹配
     return value == pattern
-
+```
 
 #### 注意什么
 
 - **配置文件的编码**：读取 JSON 配置文件时，必须指定 `encoding="utf-8"`，这能保证在非 ASCII 文件路径和非英语环境下规则文件正常解析而不产生 Unicode 乱码崩溃。
-```
 
 ---
 
@@ -289,12 +287,11 @@ def check_permission(
 
     # 7. 未命中任何规则，默认放行
     return {"action": "allow"}
-
+```
 
 #### 注意什么
 
 - **只读模式豁免**：在规划模式（Plan Mode）下，应特别豁免状态转换命令（如 `enter_plan_mode` 和 `exit_plan_mode`），否则用户将无法启动或退出该模式。
-```
 
 ---
 

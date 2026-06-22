@@ -163,12 +163,12 @@ def _load_skills_from_dir(directory: Path, source: str, skills: dict[str, SkillD
         skill = _parse_skill_file(skill_file, source, str(entry))
         if skill:
             skills[skill.name] = skill
+```
 
 #### 注意什么
 
 - **数据字段的完整性**：在 `SkillDefinition` 中我们补充了 `source`, `context`, `allowed_tools` 属性，它们对于 REPL 渲染指令和后续的高级沙箱（Fork Mode）工具集必不可少。
 - **配置文件的编码**：读取技能文件夹下的 `SKILL.md` 时，必须显式指定 `encoding="utf-8"`。
-```
 
 ---
 
@@ -220,13 +220,12 @@ def execute_skill(
         "allowed_tools": skill.allowed_tools,
         "context": skill.context,
     }
-
+```
 
 #### 注意什么
 
 - **正则替换的兼容**：替换 `$ARGUMENTS` 时，使用 `re.sub` 兼容大括号形式的 `${ARGUMENTS}` 可以提升模板编写的容错度。
 - **`execute_skill` 的封装意义**：`execute_skill` 将查找（`get_skill_by_name`）、解析、替换三个步骤封装为一个原子调用，返回的字典包含解析后的 Prompt、可选的工具限制（`allowed_tools`）以及执行模式（`context`）。这让上层调用者（如 `_execute_tool_call`）无需关心底层细节，直接根据返回的字典驱动执行。
-```
 
 ---
 
@@ -272,12 +271,11 @@ def execute_skill(
             if cmd_name not in ("clear", "plan", "cost", "compact"):
                 print_error(f"Unknown skill command: /{cmd_name}")
                 continue
-
+```
 
 #### 注意什么
 
 - **技能拦截逻辑**：注意在 REPL 的命令拦截中，必须优先匹配已注册的技能，若没有命中，再检查系统内置的 REPL 命令。如果是用户禁用的技能（`user_invocable` 为 False），则不允许用户在终端手动通过 `/` 指令调起。
-```
 
 ---
 
@@ -334,13 +332,12 @@ async def _execute_tool_call(self, name: str, inp: dict) -> str:
         # 内联模式：将解析后的提示词作为 tool_result 返回给模型
         # 模型会在下一回合将其视作新的指导方针继续执行
         return f'[Skill "{skill_name}" activated. Follow these instructions:]\n\n{result["prompt"]}'
-
+```
 
 #### 注意什么
 
 - **避免循环导入与路由正确性**：为什么必须在 `agent.py` 的 `_execute_tool_call()` 内部去拦截并路由 `skill` 工具，而不是在 `tools.py` 的全局 `execute_tool` 中执行？因为技能如果被配置为沙箱分支模式（Fork Mode），需要就地重新实例化一个新的 `Agent`（子会话代理）来执行。这需要访问高层的 `Agent` 类，如果将其写在底层 `tools.py` 模块中，会触发 `tools.py` 与 `agent.py` 的严重循环导入错误。
 - **内联文本的作用机制**：Inline 模式下，工具返回解析后的提示词文本，大模型会在收到该 Tool Result 后，将其视作全新的指导方针在下一回合继续执行，从而优雅地改变了模型的指令上下文。
-```
 
 在 `prompt.py` 中引入 `build_skill_descriptions` 汇总并注入 `{{skills}}`：
 
