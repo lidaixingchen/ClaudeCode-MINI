@@ -172,8 +172,7 @@ def check_permission(
     # 2. 如果在 plan 模式下，实行严格沙箱限制
     if mode == "plan":
         if tool_name in EDIT_TOOLS:
-            # 兼容不同的入参键名（file_path 或 path）
-            file_path = inp.get("file_path") or inp.get("path")
+            file_path = inp.get("path")
             # 唯一例外：允许写入专属的 plan 文件
             if plan_file_path and file_path == plan_file_path:
                 return {"action": "allow"}
@@ -192,7 +191,7 @@ def check_permission(
 ```
 
 #### 注意什么
-校验 `EDIT_TOOLS` 时，我们必须兼容不同的入参参数键名（有些工具入参是 `file_path`，有些是 `path`），所以在比对时使用了 `inp.get("file_path") or inp.get("path")`。
+校验 `EDIT_TOOLS` 时，所有文件工具统一使用 `path` 作为参数键名，通过 `inp.get("path")` 获取目标文件路径。
 
 ---
 

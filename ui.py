@@ -43,7 +43,7 @@ def print_tool_result(name: str, result: str) -> None:
 
 def print_assistant_text(text: str) -> None:
     """打印助手回复文本（普通颜色，支持流式追加）。"""
-    console.print(text, end="")
+    console.print(text, end="", markup=False)
 
 
 def print_retry(attempt: int, max_retries: int, reason: str) -> None:

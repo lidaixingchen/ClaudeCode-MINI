@@ -169,10 +169,10 @@ def _matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
     value = ""
     if tool_name == "run_shell":
         value = inp.get("command", "")
-    elif "file_path" in inp:
-        value = inp["file_path"]
+    elif "path" in inp:
+        value = inp["path"]
     else:
-        # 没有 file_path 的工具调用（如 list_files 只有 pattern），匹配所有规则
+        # 没有 path 的工具调用（如 list_files 只有 pattern），匹配所有规则
         return True
 
     pattern = rule["pattern"]
@@ -248,7 +248,7 @@ def check_permission(
     # 3. plan 模式：禁止除写入 plan 文件外的任何编辑/执行操作
     if mode == "plan":
         if tool_name in EDIT_TOOLS:
-            file_path = inp.get("file_path") or inp.get("path")
+            file_path = inp.get("path")
             # 仅允许写入计划文件本身
             if plan_file_path and file_path == plan_file_path:
                 return {"action": "allow"}
@@ -271,14 +271,14 @@ def check_permission(
     if tool_name == "run_shell" and is_dangerous(inp.get("command", "")):
         needs_confirm = True
         confirm_message = inp.get("command", "")
-    elif tool_name == "write_file" and not Path(inp.get("file_path", "")).exists():
+    elif tool_name == "write_file" and not Path(inp.get("path", "")).exists():
         # 新建文件需要确认（可能是误操作）
         needs_confirm = True
-        confirm_message = f"write new file: {inp.get('file_path', '')}"
-    elif tool_name == "edit_file" and not Path(inp.get("file_path", "")).exists():
+        confirm_message = f"write new file: {inp.get('path', '')}"
+    elif tool_name == "edit_file" and not Path(inp.get("path", "")).exists():
         # 编辑不存在的文件需要确认
         needs_confirm = True
-        confirm_message = f"edit non-existent file: {inp.get('file_path', '')}"
+        confirm_message = f"edit non-existent file: {inp.get('path', '')}"
 
     if needs_confirm:
         # dontAsk (CI 环境) 模式下，需要确认的操作直接拒绝（无法交互）

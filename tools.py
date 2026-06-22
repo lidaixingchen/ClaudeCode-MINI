@@ -73,7 +73,7 @@ tool_definitions: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "path": {
                     "type": "string",
                     "description": 'Path to the file to edit.',
                 },
@@ -86,7 +86,7 @@ tool_definitions: list[dict] = [
                     'description': 'The new string that will replace the old string.',
                 },
             },
-            'required': ['file_path', 'old_string', 'new_string'],
+            'required': ['path', 'old_string', 'new_string'],
         },
     },
     {
@@ -186,7 +186,7 @@ def _write_file(inp: dict) -> str:
         lines = content.splitlines()
         preview = "\n".join(f"{i+1:4d} | {l}" for i, l in enumerate(lines[:30]))
         trunc = f"\n  ... ({len(lines)} lines total)" if len(lines) > 30 else ""
-        return f"Successfully wrote to {inp['file_path']} ({len(lines)} lines):\n\n{preview}{trunc}"
+        return f"Successfully wrote to {inp['path']} ({len(lines)} lines):\n\n{preview}{trunc}"
     except Exception as e:
         return f"Error writing file: {e}"
     
@@ -223,19 +223,19 @@ def _generate_diff(old_content: str, old_string: str, new_string: str) -> str:
 def _edit_file(inp: dict) -> str:
     """精确编辑：通过唯一匹配的 old_string 替换为 new_string"""
     try:
-        path = Path(inp["file_path"])
+        path = Path(inp["path"])
         content = path.read_text(encoding="utf-8")
 
          # 带引号容错的查找
         actual = _find_actual_string(content, inp["old_string"])
         if not actual:
-            return f"Error: Could not find the specified string in {inp['file_path']}."
-        
+            return f"Error: Could not find the specified string in {inp['path']}."
+
         # 唯一性校验防止误替换——匹配多次时拒绝执行，由 LLM 调整 old_string 重试
         count = content.count(actual)
         if count > 1:
-            return f"Error: The specified string occurs {count} times in {inp['file_path']}. Please provide a more specific string to replace."
-        
+            return f"Error: The specified string occurs {count} times in {inp['path']}. Please provide a more specific string to replace."
+
         # replace 第三个参数 1 表示只替换首个匹配——即使校验通过也做防御
         new_content = content.replace(actual, inp["new_string"], 1)
         path.write_text(new_content, encoding="utf-8")
@@ -243,7 +243,7 @@ def _edit_file(inp: dict) -> str:
         diff = _generate_diff(content, actual, inp["new_string"])
         # 若实际匹配的字符串与请求不同，说明经历了引号标准化
         note = " (matched via quote normalization)" if actual != inp["old_string"] else ""
-        return f"Successfully edited {inp['file_path']}{note}. Diff:\n\n{diff}"
+        return f"Successfully edited {inp['path']}{note}. Diff:\n\n{diff}"
     except Exception as e:
         return f"Error editing file: {e}"
     

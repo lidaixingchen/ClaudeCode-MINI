@@ -76,11 +76,11 @@ tool_definitions: list[ToolDef] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "The path to the file to edit"},
+                "path": {"type": "string", "description": "Path to the file to edit."},
                 "old_string": {"type": "string", "description": "The exact string to find and replace"},
                 "new_string": {"type": "string", "description": "The string to replace it with"},
             },
-            "required": ["file_path", "old_string", "new_string"],
+            "required": ["path", "old_string", "new_string"],
         },
     },
     {
@@ -303,23 +303,23 @@ def _generate_diff(old_content: str, old_string: str, new_string: str) -> str:
 
 def _edit_file(inp: dict) -> str:
     try:
-        path = Path(inp["file_path"])
+        path = Path(inp["path"])
         content = path.read_text(encoding="utf-8")
 
         actual = _find_actual_string(content, inp["old_string"])
         if not actual:
-            return f"Error: old_string not found in {inp['file_path']}"
+            return f"Error: old_string not found in {inp['path']}"
 
         count = content.count(actual)
         if count > 1:
-            return f"Error: old_string found {count} times in {inp['file_path']}. Must be unique."
+            return f"Error: old_string found {count} times in {inp['path']}. Must be unique."
 
         new_content = content.replace(actual, inp["new_string"], 1)
         path.write_text(new_content, encoding="utf-8")
 
         diff = _generate_diff(content, actual, inp["new_string"])
         quote_note = " (matched via quote normalization)" if actual != inp["old_string"] else ""
-        return f"Successfully edited {inp['file_path']}{quote_note}\n\n{diff}"
+        return f"Successfully edited {inp['path']}{quote_note}\n\n{diff}"
     except Exception as e:
         return f"Error editing file: {e}"
 
@@ -619,12 +619,12 @@ def check_permission(
     if tool_name == "run_shell" and is_dangerous(inp.get("command", "")):
         needs_confirm = True
         confirm_message = inp.get("command", "")
-    elif tool_name == "write_file" and not Path(inp.get("file_path", "")).exists():
+    elif tool_name == "write_file" and not Path(inp.get("path", "")).exists():
         needs_confirm = True
-        confirm_message = f"write new file: {inp.get('file_path', '')}"
-    elif tool_name == "edit_file" and not Path(inp.get("file_path", "")).exists():
+        confirm_message = f"write new file: {inp.get('path', '')}"
+    elif tool_name == "edit_file" and not Path(inp.get("path", "")).exists():
         needs_confirm = True
-        confirm_message = f"edit non-existent file: {inp.get('file_path', '')}"
+        confirm_message = f"edit non-existent file: {inp.get('path', '')}"
 
     if needs_confirm:
         if mode == "dontAsk":
@@ -659,7 +659,7 @@ async def execute_tool(
     if name == "read_file":
         result = _read_file(inp)
         if read_file_state is not None and not result.startswith("Error"):
-            abs_path = str(Path(inp["file_path"]).resolve())
+            abs_path = str(Path(inp["path"]).resolve())
             try:
                 read_file_state[abs_path] = os.path.getmtime(abs_path)
             except OSError:
@@ -667,14 +667,14 @@ async def execute_tool(
         return _truncate_result(result)
 
     if name in ("write_file", "edit_file") and read_file_state is not None:
-        abs_path = str(Path(inp["file_path"]).resolve())
+        abs_path = str(Path(inp["path"]).resolve())
         if os.path.exists(abs_path):
             if abs_path not in read_file_state:
                 verb = "writing" if name == "write_file" else "editing"
                 return f"Error: You must read this file before {verb}. Use read_file first to see its current contents."
             if os.path.getmtime(abs_path) != read_file_state[abs_path]:
                 verb = "writing" if name == "write_file" else "editing"
-                return f"Warning: {inp['file_path']} was modified externally since your last read. Please read_file again before {verb}."
+                return f"Warning: {file_path} was modified externally since your last read. Please read_file again before {verb}."
 
     # tool_search: activate deferred tools and return their schemas
     if name == "tool_search":

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -447,49 +446,37 @@ class Agent:
             # 动态编译最新的系统提示词
             current_system_prompt = build_system_prompt()
             self.history.update_system_prompt(current_system_prompt)
-            # 2. 调用 OpenAI 兼容 API
-            response = await self._client.chat.completions.create(
-                model=self.backend.model,
-                messages=self.history.openai_messages,
-                tools=_to_openai_tools(get_tool_definitions()),
-            )
-            message = response.choices[0].message
+            # 2. 调用 OpenAI 兼容 API（使用流式调用以支持 thinking 显示）
+            response = await self._call_openai_stream()
+            message = response["choices"][0]["message"]
 
             # 3. 构造 assistant 回复——必须保留 tool_calls 结构，否则后续 tool 消息会报协议错误
-            msg_dict = {"role": "assistant", "content": message.content}
-            if message.tool_calls:
-                msg_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in message.tool_calls
-                ]
+            # OpenAI API 要求 content 和 tool_calls 不能同时为 None/空
+            msg_dict: dict[str, Any] = {"role": "assistant", "content": message.get("content") or ""}
+            if message.get("tool_calls"):
+                msg_dict["tool_calls"] = message["tool_calls"]
+            if message.get("reasoning_content"):
+                msg_dict["reasoning_content"] = message["reasoning_content"]
             self.history.append_assistant_message(msg_dict)
 
             # 4. 检查是否有工具调用——循环终止条件与 Anthropic 后端一致
-            if not message.tool_calls:
+            if not message.get("tool_calls"):
                 break
 
             # 5. 执行工具并将结果（role: "tool"）推入历史
-            import json
             tool_results = []
-            for tc in message.tool_calls:
+            for tc in message["tool_calls"]:
                 # arguments 是 JSON 字符串，需要解析为 dict
                 try:
-                    args = json.loads(tc.function.arguments)
+                    args = json.loads(tc["function"]["arguments"])
                 except Exception:
                     args = {}  # 解析失败时用空 dict，让工具自行处理缺失参数
-                
-                result = await execute_tool(tc.function.name, args)
+
+                result = await execute_tool(tc["function"]["name"], args)
                 tool_results.append({
                     "role": "tool",
-                    "tool_call_id": tc.id,  # 必须与 assistant 消息中的 tool_calls.id 对应
-                    "name": tc.function.name,
+                    "tool_call_id": tc["id"],  # 必须与 assistant 消息中的 tool_calls.id 对应
+                    "name": tc["function"]["name"],
                     "content": result,
                 })
             self.history.messages.extend(tool_results)  # 直接 extend，因为 OpenAI 模式下工具结果也是 role: "tool" 消息
@@ -553,6 +540,7 @@ class Agent:
 
             tool_blocks_by_index: dict[int, dict] = {}  # 按索引跟踪工具块的累积状态
             first_text = True  # 标记是否为首个有效文本，用于控制 spinner 停止时机
+            is_thinking_block = False  # 标记当前是否在 thinking 块中
 
             # 启动 API 监听流
             async with self._client.messages.stream(**create_params) as stream:
@@ -586,6 +574,7 @@ class Agent:
                                 self._emit_text("\n  [thinking] ")
                                 first_text = False
                             self._emit_text(delta.thinking)
+                            is_thinking_block = True  # 标记当前是 thinking 块
                         elif hasattr(delta, 'partial_json'):
                             # 累积工具调用的 JSON 参数片段
                             tb = tool_blocks_by_index.get(event.index)
@@ -593,6 +582,10 @@ class Agent:
                                 tb["input_json"] += delta.partial_json
 
                     elif event.type == "content_block_stop":
+                        # thinking 块结束时，添加结束标记并换行，保持缩进
+                        if is_thinking_block:
+                            self._emit_text(" [/thinking]\n  ")
+                            is_thinking_block = False
                         # 工具调用块结束时，尝试解析完整 JSON 并触发回调
                         tb = tool_blocks_by_index.pop(event.index, None)
                         if tb and on_tool_block_complete:
@@ -618,11 +611,18 @@ class Agent:
     async def _call_openai_stream(self) -> dict:
         """OpenAI 后端流式调用：处理增量分片并实时渲染文本。"""
         async def _do():
+            # DeepSeek 要求：发送给 API 的消息中不能包含 reasoning_content 字段，否则返回 400
+            # 因此在发送前需要剥离该字段（保留历史记录中的 reasoning_content 用于会话持久化）
+            clean_messages = [
+                {k: v for k, v in msg.items() if k != "reasoning_content"}
+                for msg in self.history.openai_messages
+            ]
+
             # 构建请求参数
             create_params: dict[str, Any] = {
                 "model": self.backend.model,
                 "tools": _to_openai_tools(get_tool_definitions()),
-                "messages": self.history.openai_messages,
+                "messages": clean_messages,
                 "stream": True,
                 "stream_options": {"include_usage": True},  # 要求返回 token 用量统计
             }
@@ -640,7 +640,7 @@ class Agent:
             content = ""  # 累积完整的回复文本
             reasoning_content = ""  # DeepSeek 等模型的思维链内容
             first_text = True  # 标记首个文本到达，用于控制 spinner 停止
-            reasoning_started = False  # 标记是否已开始输出思维链
+            first_thinking = True  # 标记首个 thinking 到达，用于显示 [thinking] 标记
             tool_calls: dict[int, dict] = {}  # 按索引累积工具调用参数
             finish_reason = ""
             usage = None  # 用于记录最后一个 chunk 返回的 token 用量
@@ -659,31 +659,35 @@ class Agent:
 
                 # 1. 处理思维链内容（reasoning_content）
                 # DeepSeek 等模型通过 delta.reasoning_content 逐步推送思维链
+                # 实时显示，标记为 [thinking]
                 if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                    if not reasoning_started:
+                    if first_thinking:
                         stop_spinner()
                         self._emit_text("\n  [thinking] ")
-                        reasoning_started = True
-                        first_text = False
+                        first_thinking = False
                     self._emit_text(delta.reasoning_content)
                     reasoning_content += delta.reasoning_content
+                    continue  # 跳过 content 处理
 
                 # 2. 处理普通文本内容
                 if delta and delta.content:
+                    # thinking 结束，添加结束标记并换行，保持缩进
+                    if not first_thinking and first_text:
+                        self._emit_text(" [/thinking]\n  ")
                     if first_text:
                         stop_spinner()
-                        self._emit_text("\n")  # 首字输出前换行
+                        self._emit_text("\n  ")  # 首字输出前换行并缩进
                         first_text = False
                     self._emit_text(delta.content)
                     content += delta.content
 
                 # 3. 处理工具调用块（tool_calls）
-                if delta and delta.tool_call:
-                    for tc in delta.tool_call:
+                if delta and delta.tool_calls:
+                    for tc in delta.tool_calls:
                         existing = tool_calls.get(tc.index)
                         if existing:
                            if tc.function and tc.function.arguments:
-                               existing["function"]["arguments"] += tc.function.arguments
+                               existing["arguments"] += tc.function.arguments
                         else:
                             tool_calls[tc.index] = {
                                 "id": tc.id or "",
@@ -693,6 +697,23 @@ class Agent:
 
                 if chunk.choices[0].finish_reason:
                     finish_reason = chunk.choices[0].finish_reason
+
+            # 如果 content 为空但 reasoning_content 有值，说明模型把正文放在了 thinking 里
+            # 此时用 reasoning_content 作为正文显示，防止回复丢失
+            if not content and reasoning_content:
+                # thinking 结束，添加结束标记并换行，保持缩进
+                if not first_thinking:
+                    self._emit_text(" [/thinking]\n  ")
+                self._emit_text(reasoning_content)
+                content = reasoning_content
+            # 如果 thinking 有内容但没有 content，确保结束标记被添加
+            elif not first_thinking and not content:
+                self._emit_text(" [/thinking]\n")
+            # 如果 content 和 reasoning_content 相同，说明是重复内容，不需要再次显示
+            elif content and reasoning_content and content == reasoning_content:
+                # 只添加结束标记（如果还没有添加的话）
+                if not first_thinking:
+                    self._emit_text(" [/thinking]\n")
 
             # 按索引排序后拼装成标准 OpenAI 格式的工具对象结构
             # 排序确保即使流式传输乱序，最终结构也严格对应

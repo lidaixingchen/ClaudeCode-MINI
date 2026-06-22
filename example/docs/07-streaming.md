@@ -259,6 +259,7 @@ Anthropic API 的流式响应会混杂输出 `text` 块和 `thinking` 块。
 
             tool_blocks_by_index: dict[int, dict] = {}
             first_text = True  # 新增：标记是否为首个有效文本，用于控制 spinner 停止时机
+            is_thinking_block = False  # 新增：标记当前是否在 thinking 块中
 
             async with self._client.messages.stream(**create_params) as stream:
                 async for event in stream:
@@ -279,12 +280,30 @@ Anthropic API 的流式响应会混杂输出 `text` 块和 `thinking` 块。
                                 self._emit_text("\n  [thinking] ")
                                 first_text = False
                             self._emit_text(delta.thinking)
+                            is_thinking_block = True  # 标记当前是 thinking 块
                         elif hasattr(delta, 'partial_json'):
                             tb = tool_blocks_by_index.get(event.index)
                             if tb:
                                 tb["input_json"] += delta.partial_json
 
-                    # ... content_block_stop 不变 ...
+                    elif event.type == "content_block_stop":
+                        # thinking 块结束时，添加结束标记并换行，保持缩进
+                        if is_thinking_block:
+                            self._emit_text(" [/thinking]\n  ")
+                            is_thinking_block = False
+                        # 工具调用块结束时，尝试解析完整 JSON 并触发回调
+                        tb = tool_blocks_by_index.pop(event.index, None)
+                        if tb and on_tool_block_complete:
+                            try:
+                                parsed = json.loads(tb["input_json"] or "{}")
+                            except Exception:
+                                parsed = {}
+                            on_tool_block_complete({
+                                "type": "tool_use",
+                                "id": tb["id"],
+                                "name": tb["name"],
+                                "input": parsed,
+                            })
 ```
 
 **补丁 4**：在 `get_final_message()` 之后、`return` 之前，添加 thinking 块过滤：
@@ -324,11 +343,18 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
     async def _call_openai_stream(self) -> dict:
         """OpenAI 后端流式调用：处理增量分片并实时渲染文本。"""
         async def _do():
+            # DeepSeek 要求：发送给 API 的消息中不能包含 reasoning_content 字段，否则返回 400
+            # 因此在发送前需要剥离该字段（保留历史记录中的 reasoning_content 用于会话持久化）
+            clean_messages = [
+                {k: v for k, v in msg.items() if k != "reasoning_content"}
+                for msg in self.history.openai_messages
+            ]
+
             # 构建请求参数
             create_params: dict[str, Any] = {
                 "model": self.backend.model,
                 "tools": _to_openai_tools(get_tool_definitions()),
-                "messages": self.history.openai_messages,
+                "messages": clean_messages,
                 "stream": True,
                 "stream_options": {"include_usage": True},  # 要求返回 token 用量统计
             }
@@ -346,7 +372,7 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
             content = ""  # 累积完整的回复文本
             reasoning_content = ""  # DeepSeek 等模型的思维链内容
             first_text = True  # 标记首个文本到达，用于控制 spinner 停止
-            reasoning_started = False  # 标记是否已开始输出思维链
+            first_thinking = True  # 标记首个 thinking 到达，用于显示 [thinking] 标记
             tool_calls: dict[int, dict] = {}  # 按索引累积工具调用参数
             finish_reason = ""
             usage = None  # 用于记录最后一个 chunk 返回的 token 用量
@@ -365,20 +391,24 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
 
                 # 1. 处理思维链内容（reasoning_content）
                 # DeepSeek 等模型通过 delta.reasoning_content 逐步推送思维链
+                # 实时显示，标记为 [thinking]
                 if delta and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                    if not reasoning_started:
+                    if first_thinking:
                         stop_spinner()
                         self._emit_text("\n  [thinking] ")
-                        reasoning_started = True
-                        first_text = False  # 思考开始后，后续 text 不再触发首字逻辑
+                        first_thinking = False
                     self._emit_text(delta.reasoning_content)
                     reasoning_content += delta.reasoning_content
+                    continue  # 跳过 content 处理
 
                 # 2. 处理正文输出文本，并进行流式刷新
                 if delta and delta.content:
+                    # thinking 结束，添加结束标记并换行，保持缩进
+                    if not first_thinking and first_text:
+                        self._emit_text(" [/thinking]\n  ")
                     if first_text:
                         stop_spinner()
-                        self._emit_text("\n")  # 首字输出前先换行
+                        self._emit_text("\n  ")  # 首字输出前先换行并缩进
                         first_text = False
                     self._emit_text(delta.content)
                     content += delta.content  # 累积完整文本用于历史记录
@@ -402,6 +432,23 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
 
                 if chunk.choices[0].finish_reason:
                     finish_reason = chunk.choices[0].finish_reason
+
+            # 如果 content 为空但 reasoning_content 有值，说明模型把正文放在了 thinking 里
+            # 此时用 reasoning_content 作为正文显示，防止回复丢失
+            if not content and reasoning_content:
+                # thinking 结束，添加结束标记并换行，保持缩进
+                if not first_thinking:
+                    self._emit_text(" [/thinking]\n  ")
+                self._emit_text(reasoning_content)
+                content = reasoning_content
+            # 如果 thinking 有内容但没有 content，确保结束标记被添加
+            elif not first_thinking and not content:
+                self._emit_text(" [/thinking]\n")
+            # 如果 content 和 reasoning_content 相同，说明是重复内容，不需要再次显示
+            elif content and reasoning_content and content == reasoning_content:
+                # 只添加结束标记（如果还没有添加的话）
+                if not first_thinking:
+                    self._emit_text(" [/thinking]\n")
 
             # 3. 按索引排序后拼装成标准 OpenAI 格式的工具对象结构
             # 排序确保即使流式传输乱序，最终结构也严格对应
@@ -451,7 +498,59 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
   - `reasoning_effort`：控制思考强度，可选 `low` / `medium` / `high` / `max`，通过 `THINKING_EFFORT` 环境变量设置，默认 `high`
   - `extra_body={"thinking": {"type": "enabled"}}`：启用思考模式的开关
   - 注意：这两个参数需要通过 `extra_body` 传递，因为 OpenAI SDK 的标准参数中没有 `thinking` 字段
-- **思维链内容处理**：DeepSeek 等模型通过 `delta.reasoning_content` 逐步推送思维链内容，与 `delta.content`（正文）同级。我们在流式渲染时先显示 `[thinking]` 标记，再逐字输出思维链，最后输出正文
+- **思维链内容处理**：DeepSeek 等模型通过 `delta.reasoning_content` 逐步推送思维链内容，与 `delta.content`（正文）同级。处理策略是**实时显示、流后判断**：
+  - **实时显示**：流式过程中将 `reasoning_content` 实时输出，标记为 `[thinking]`，与 Anthropic 后端行为一致
+  - **结束标记**：thinking 内容结束后添加 `[/thinking]` 结束标记，形成完整的 `[thinking]...[/thinking]` 块
+  - **流后判断**：流式结束后，如果 `content` 为空但 `reasoning_content` 有值，说明模型把正文放在了 thinking 里，此时用 `reasoning_content` 作为正文显示
+  - **`continue` 跳过**：处理 `reasoning_content` 时必须 `continue` 跳过 `content` 处理
+  - **发送前剥离**：DeepSeek 要求 API 请求中不能包含 `reasoning_content` 字段（否则返回 400），因此在 `_call_openai_stream` 中构建 `messages` 时需要剥离该字段
+
+#### 修改 `_chat_openai` 使用流式调用
+
+实现 `_call_openai_stream` 后，还需要修改 `_chat_openai` 方法，将原来的非流式 `create()` 调用替换为流式调用，否则 thinking 内容不会被显示：
+
+```python
+# agent.py — _chat_openai 修改：使用流式调用
+
+    async def _chat_openai(self, user_message: str) -> None:
+        """OpenAI 兼容后端的 Agent Loop"""
+        self.history.append_user_message(user_message)
+
+        while True:
+            current_system_prompt = build_system_prompt()
+            self.history.update_system_prompt(current_system_prompt)
+            # 使用流式调用，支持 thinking 显示
+            response = await self._call_openai_stream()
+            message = response["choices"][0]["message"]
+
+            # 构造 assistant 回复——content 不能为 None，否则 DeepSeek 返回 400
+            msg_dict: dict[str, Any] = {"role": "assistant", "content": message.get("content") or ""}
+            if message.get("tool_calls"):
+                msg_dict["tool_calls"] = message["tool_calls"]
+            if message.get("reasoning_content"):
+                msg_dict["reasoning_content"] = message["reasoning_content"]
+            self.history.append_assistant_message(msg_dict)
+
+            # 检查是否有工具调用
+            if not message.get("tool_calls"):
+                break
+
+            # 执行工具并推入历史
+            tool_results = []
+            for tc in message["tool_calls"]:
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except Exception:
+                    args = {}
+                result = await execute_tool(tc["function"]["name"], args)
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "name": tc["function"]["name"],
+                    "content": result,
+                })
+            self.history.messages.extend(tool_results)
+```
 
 ---
 
@@ -555,6 +654,106 @@ delay = 1.0 * (2 ** attempt)
 
 ---
 
+### 3. Rich 吞掉 `[thinking]` 标签
+
+使用 Rich 的 `console.print()` 输出流式文本时，`[thinking]` 会被误认为是 Rich markup 标签（类似 `[bold]`、`[red]`）。由于 `thinking` 不是合法的 Rich 标签，Rich 会静默吞掉它，导致 `[thinking]` 标记"消失"——thinking 内容直接混入正文，看起来像是没有被过滤。
+
+```python
+# ❌ 错误：console.print 会把 [thinking] 当作 markup 解析
+console.print("  [thinking] 思考内容...", end="")
+# 实际输出：  思考内容...  （[thinking] 被吞掉）
+
+# ✅ 正确：禁用 markup
+console.print("  [thinking] 思考内容...", end="", markup=False)
+```
+
+**修正**：在 `print_assistant_text` 中使用 `markup=False` 参数，确保 `[thinking]` 等方括号文本被原样输出。
+
+---
+
+### 4. DeepSeek 拒绝含 `reasoning_content` 的历史消息
+
+DeepSeek 官方文档明确要求：**发送给 API 的消息中不能包含 `reasoning_content` 字段**，否则返回 `400 Bad Request`：
+
+```text
+Invalid assistant message: content or tool_calls must be set
+```
+
+**原因**：`reasoning_content` 是 DeepSeek 返回的思考链内容，仅用于客户端展示和会话持久化。在下一轮对话中，该字段必须从消息历史中剥离后再发送给 API。
+
+**修正**：在 `_call_openai_stream` 中构建请求参数时，对消息列表进行清洗：
+
+```python
+# ❌ 错误：直接将含 reasoning_content 的历史消息发送给 API
+create_params["messages"] = self.history.openai_messages
+
+# ✅ 正确：发送前剥离 reasoning_content
+clean_messages = [
+    {k: v for k, v in msg.items() if k != "reasoning_content"}
+    for msg in self.history.openai_messages
+]
+create_params["messages"] = clean_messages
+```
+
+---
+
+### 5. 工具调用参数累加时 KeyError
+
+在 `_call_openai_stream` 中累加工具调用参数时，中间累加器 `tool_calls` 的字典结构是 `{"id", "name", "arguments"}`，而非 OpenAI API 的嵌套格式 `{"function": {"arguments"}}`。如果写成 `existing["function"]["arguments"]` 会触发 `KeyError: 'function'`。
+
+```python
+# ❌ 错误：existing 没有 "function" 键
+existing["function"]["arguments"] += tc.function.arguments
+
+# ✅ 正确：直接访问 "arguments"
+existing["arguments"] += tc.function.arguments
+```
+
+---
+
+### 6. Thinking 结束标记缺失导致内容混在一起
+
+当 thinking 内容和正文内容在同一个 chunk 中到达时，由于 `continue` 语句跳过了 content 处理，结束标记 `[/thinking]` 不会被添加，导致 thinking 和正文混在一起：
+
+```python
+# ❌ 错误：只在 content 处理时添加结束标记
+if delta and delta.content:
+    if not first_thinking and first_text:
+        self._emit_text(" [/thinking]")
+    # ...
+
+# ✅ 正确：在流结束后也需要检查并添加结束标记，并确保换行和缩进
+if not content and reasoning_content:
+    if not first_thinking:
+        self._emit_text(" [/thinking]\n  ")
+    self._emit_text(reasoning_content)
+elif not first_thinking and not content:
+    self._emit_text(" [/thinking]\n")
+```
+
+**修正**：在流结束后检查是否需要添加结束标记，并确保在结束标记后添加换行符和缩进，确保 thinking 和正文内容清晰分开显示且对齐。
+
+### 7. DeepSeek 模型重复显示 thinking 和正文内容
+
+DeepSeek 模型有时会把相同的文本同时放在 `reasoning_content` 和 `content` 中，导致 thinking 内容和正文内容重复显示：
+
+```python
+# ❌ 错误：不检查重复，直接显示 content
+if delta and delta.content:
+    self._emit_text(delta.content)
+    content += delta.content
+
+# ✅ 正确：检查 content 和 reasoning_content 是否相同
+elif content and reasoning_content and content == reasoning_content:
+    # 只添加结束标记，不重复显示 content
+    if not first_thinking:
+        self._emit_text(" [/thinking]\n")
+```
+
+**修正**：在流结束后检查 `content` 和 `reasoning_content` 是否相同，如果相同则只添加结束标记，不重复显示 content。
+
+---
+
 ## ✅ 验收点
 
 ### 输入与验证
@@ -565,7 +764,8 @@ delay = 1.0 * (2 ** attempt)
    ```
 2. 输入一个需要较长文本回复的复杂查询（例如让模型写一段 100 行 of 算法）。
 3. **观察流式效果**：仔细核对字词是否是一个一个跳出来，在输出过程中，能否通过 `Ctrl+C` 中断输出流并成功返回 `> ` 提示符。
-4. **模拟重试测试**：可以通过暂时掐断网线或提供一个极低重载限流的模拟接口 base_url，验证终端是否能正确捕获网络异常并成功打印出 `↻ Retry 1/3: ...` 的提示。
+4. **观察 thinking 显示**：当模型返回思考链内容时，应看到 `[thinking]` 标记后跟思考内容，思考内容会实时逐字显示，结束后会显示 `[/thinking]` 结束标记并换行，正文内容会在新的一行显示且与 thinking 内容对齐。即使对于简单问题，也会显示完整的 `[thinking]...[/thinking]` 块。注意：对于 DeepSeek 模型，如果 thinking 和正文内容相同，不会重复显示。
+5. **模拟重试测试**：可以通过暂时掐断网线或提供一个极低重载限流的模拟接口 base_url，验证终端是否能正确捕获网络异常并成功打印出 `↻ Retry 1/3: ...` 的提示。
 
 ### 失败时如何排查
 

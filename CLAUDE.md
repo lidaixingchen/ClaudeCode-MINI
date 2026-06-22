@@ -1,2 +1,2 @@
-我所说的源码一律指教学源码example/mini_claude/
-根目录下的 Python 文件是我写的代码
+用户所说的源码一律指教学源码example/mini_claude/
+根目录下的 Python 文件是用户学习写的代码

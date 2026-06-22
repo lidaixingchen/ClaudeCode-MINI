@@ -304,7 +304,7 @@ class Agent:
                     tool_info = self._find_tool_use_by_id(tool_use_id)
                     # 只有 SNIPPABLE_TOOLS 中的工具结果才可裁剪
                     if tool_info and tool_info[“name”] in SNIPPABLE_TOOLS:
-                        results.append({“mi”: mi, “bi”: bi, “name”: tool_info[“name”], “file_path”: tool_info.get(“input”, {}).get(“file_path”)})
+                        results.append({“mi”: mi, “bi”: bi, “name”: tool_info[“name”], “file_path”: tool_info.get(“input”, {}).get(“path”)})
 
         if len(results) <= KEEP_RECENT_RESULTS:
             return  # 结果数量未超阈值，无需裁剪
@@ -313,8 +313,8 @@ class Agent:
         to_snip = set()
         seen_files: dict[str, list[int]] = {}
         for i, r in enumerate(results):
-            if r[“name”] == “read_file” and r.get(“file_path”):
-                seen_files.setdefault(r[“file_path”], []).append(i)
+            if r[“name”] == “read_file” and r.get(“path”):
+                seen_files.setdefault(r[“path”], []).append(i)
 
         # 同一文件的多次读取，只保留最后一次（前面的已过时）
         for indices in seen_files.values():

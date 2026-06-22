@@ -900,7 +900,7 @@ class Agent:
                     tool_use_id = block.get("tool_use_id")
                     tool_info = self._find_tool_use_by_id(tool_use_id)
                     if tool_info and tool_info["name"] in SNIPPABLE_TOOLS:
-                        results.append({"mi": mi, "bi": bi, "name": tool_info["name"], "file_path": tool_info.get("input", {}).get("file_path")})
+                        results.append({"mi": mi, "bi": bi, "name": tool_info["name"], "file_path": tool_info.get("input", {}).get("path")})
 
         if len(results) <= KEEP_RECENT_RESULTS:
             return
