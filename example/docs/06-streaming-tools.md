@@ -136,6 +136,8 @@ response = await self._client.messages.create(
 
 然后在 `Agent` 类中编写 `_call_anthropic_stream` 方法。注意 `max_tokens` 通过上方定义的 `_get_max_output_tokens()` 根据模型动态计算：
 
+> **📌 后续升级提示**：本步骤实现的是 `_call_anthropic_stream` 的基础版（仅处理工具调用块监听）。第七课步骤 2 会以增量补丁的形式对其升级，新增文本流式渲染、思考链实时显示与过滤、以及重试包裹。
+
 ```python
 # agent.py（续）— Agent 类的新增方法
 

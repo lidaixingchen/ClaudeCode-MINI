@@ -66,65 +66,23 @@ if message.content:
 
 ## 🚀 开始实现
 
-### 步骤 0：实现 thinking 模式检测与输出 Token 限制
+### 步骤 0：实现 thinking 模式解析与输出 Token 限制
 
 #### 为什么做
 
 在实现流式输出之前，我们需要先确定两个关键的辅助函数：
-1. **thinking 模式检测**：判断当前模型是否支持 Extended Thinking（思考链）功能，以及是否支持自适应思考模式。这决定了我们在调用 API 时是否启用 thinking 参数。
+
+1. **thinking 模式解析**：通过 `THINKING_MODE` 环境变量判断当前应使用的思考模式（`disabled` / `adaptive` / `enabled`）。这决定了我们在调用 API 时是否启用 thinking 参数。
 2. **输出 Token 限制**：根据不同的模型版本，设置合理的最大输出 Token 数，避免超出模型的上下文窗口限制。
 
 #### 做什么
 
-在 `agent.py` 中实现模型能力检测函数和 Token 限制函数：
+在 `agent.py` 中实现 thinking 模式解析和 Token 限制函数：
 
 ```python
 # agent.py 中的修改
 
 import os
-
-# 已知支持推理/思考的第三方模型关键词（小写）
-_THINKING_MODEL_KEYWORDS = ("deepseek-r1", "qwq", "grok-3", "reasoning", "think")
-
-
-def _model_supports_thinking(model: str) -> bool:
-    """判断模型是否支持 Extended Thinking（思考链）功能。
-
-    检测优先级：
-    1. Claude 模型硬编码（已知型号自动识别）
-    2. THINKING_MODE 环境变量显式覆盖（第三方模型推荐方式）
-    3. 关键词启发式匹配（deepseek-r1、qwq 等）
-    4. 默认返回 False（安全回退）
-    """
-    m = model.lower()
-    # 1. Claude 3 系列明确不支持 thinking
-    if "claude-3-" in m or "3-5-" in m or "3-7-" in m:
-        return False
-    # 2. Claude 4+ 支持
-    if "claude" in m and any(x in m for x in ("opus", "sonnet", "haiku")):
-        return True
-    # 3. 第三方模型：环境变量显式覆盖（最高优先级）
-    env_override = os.environ.get("THINKING_MODE", "").lower()
-    if env_override in ("enabled", "adaptive"):
-        return True
-    if env_override == "disabled":
-        return False
-    # 4. 第三方模型：关键词启发式匹配
-    return any(kw in m for kw in _THINKING_MODEL_KEYWORDS)
-
-
-def _model_supports_adaptive_thinking(model: str) -> bool:
-    """判断模型是否支持自适应思考模式（可动态调整思考深度）。
-
-    仅 Claude opus-4-6 / sonnet-4-6 原生支持。
-    第三方模型需显式设置 THINKING_MODE=adaptive 才会启用。
-    """
-    m = model.lower()
-    # Claude 已知型号
-    if "opus-4-6" in m or "sonnet-4-6" in m:
-        return True
-    # 第三方：环境变量显式指定 adaptive 时信任用户
-    return os.environ.get("THINKING_MODE", "").lower() == "adaptive"
 
 
 def _get_max_output_tokens(model: str) -> int:
@@ -190,17 +148,11 @@ def _get_thinking_budget(model: str, max_output: int) -> int:
 
 #### 注意什么
 
-- **模型版本识别**：`_model_supports_thinking` 函数通过字符串匹配来识别模型版本。Claude 3 系列（如 claude-3-opus、claude-3.5-sonnet）不支持 thinking，而更新的版本（如 claude-4-opus、claude-4-sonnet）则支持。
-- **自适应思考**：只有最新的 opus-4-6 和 sonnet-4-6 版本支持自适应思考模式，这种模式可以动态调整思考深度。
 - **Token 限制策略**：不同模型的上下文窗口大小不同，因此需要根据模型版本设置合理的输出 Token 上限，避免请求失败。
 - **思考强度（Thinking Effort）**：`_get_thinking_budget` 函数控制思考链的 token 预算。支持两种调节方式：
   - **`THINKING_EFFORT`**（推荐）：语义化级别，可选 `low`（10%）、`medium`（30%）、`high`（60%）、`max`（100%），直观易用
   - **`THINKING_BUDGET`**（高级）：直接指定 token 数，保留向后兼容
   - 预算值会被钳制到 `[1024, max_output - 1]` 范围内。对于第三方推理模型，使用 `low` 或 `medium` 可以降低延迟和成本
-- **第三方模型支持**：OpenAI 兼容后端的模型名是无限开放的，不可能穷举所有型号。因此我们采用**三层检测策略**：
-  1. **Claude 硬编码**（自动识别）：已知的 Claude 型号直接匹配
-  2. **环境变量覆盖**（推荐方式）：通过 `THINKING_MODE`、`THINKING_EFFORT`、`MAX_OUTPUT_TOKENS`、`CONTEXT_WINDOW` 等环境变量，用户显式声明第三方模型的能力
-  3. **关键词启发式匹配**（兜底）：对 `deepseek-r1`、`qwq`、`grok-3` 等已知推理模型做关键词匹配
 - **第三方模型使用示例**：
 
   ```bash
@@ -239,6 +191,13 @@ from ui import print_assistant_text, stop_spinner  # UI 库封装了 sys.stdout.
 class Agent:
     # ... 在 __init__ 中定义 self._output_buffer: list[str] | None = None
 
+    def _resolve_thinking_mode(self) -> Literal["disabled", "adaptive", "enabled"]:
+        """根据 THINKING_MODE 环境变量解析思考模式。"""
+        mode = os.environ.get("THINKING_MODE", "disabled").lower()
+        if mode in ("disabled", "adaptive", "enabled"):
+            return mode
+        return "disabled"
+
     def _emit_text(self, text: str) -> None:
         """流式文本输出：区分主代理直接打印 vs 子代理缓冲收集。"""
         # 子代理运行时缓冲输出，避免干扰主终端显示
@@ -247,13 +206,12 @@ class Agent:
         else:
             # 主代理直接调用 UI 层进行格式化输出
             print_assistant_text(text)
-
+```
 
 #### 注意什么
 
 - **状态存储区分**：在本节的教学简化版中我们直接将 `self._output_buffer` 定义在实例上。但在实际完整 codebase 的架构中，为了统一管理运行状态，我们将其保存在状态容器 `self.state.output_buffer` 中。
 - **UI 模块结合**：这里调用的 `print_assistant_text()` 是第 5 课所创建的 `ui.py` 中定义的函数，它可以确保流式字符的输出格式整齐。
-```
 
 ---
 
@@ -267,99 +225,84 @@ Anthropic API 的流式响应会混杂输出 `text` 块和 `thinking` 块。
 
 #### 做什么
 
-在 `agent.py` 的 `_call_anthropic_stream` 中实现流监听及思考链清洗逻辑：
+在第六课的 `_call_anthropic_stream` 基础上进行 4 处增量修改：
+
+**补丁 1**：将方法体包裹在 `_do()` 内部函数中，并用 `_with_retry` 包裹返回值（先跳过，步骤 4 实现 `_with_retry` 后再改）。同时在 docstring 中更新描述：
 
 ```python
-# agent.py（续）
+# agent.py — _call_anthropic_stream 修改 1：包裹 _do + 重试
 
     async def _call_anthropic_stream(self, on_tool_block_complete=None) -> Any:
         """Anthropic 后端流式调用：处理 SSE 事件流，实时渲染文本并过滤思考链。"""
         async def _do():
-            max_output = _get_max_output_tokens(self.backend.model)
-            create_params: dict[str, Any] = {
-                "model": self.backend.model,
-                # thinking 模式下需要更大输出空间，禁用时回退到默认值
-                "max_tokens": max_output if self.state.thinking_mode != "disabled" else 16384,
-                "system": self._system_prompt,
-                "tools": get_tool_definitions(),
-                "messages": self.history.anthropic_messages,
-            }
+            # ... 原方法体全部缩进一级，放到 _do() 内部 ...
+            # （下方补丁 2~4 均在 _do() 内部修改）
 
-            # 根据 thinking_mode 决定是否启用 Extended Thinking
+        return await _with_retry(_do)
+```
+
+**补丁 2**：替换 thinking budget 计算，支持环境变量调节：
+
+```python
+# agent.py — _call_anthropic_stream 修改 2：thinking budget 可调
+
+            # （替换原来的 budget_tokens = max_output - 1）
             if self.state.thinking_mode in ("adaptive", "enabled"):
-                # 使用 _get_thinking_budget 获取预算，支持 THINKING_BUDGET 环境变量调节
                 budget = _get_thinking_budget(self.backend.model, max_output)
                 create_params["thinking"] = {"type": "enabled", "budget_tokens": budget}
+```
 
-            tool_blocks_by_index: dict[int, dict] = {}  # 按索引跟踪工具块的累积状态
-            first_text = True  # 标记是否为首个有效文本，用于控制 spinner 停止时机
+**补丁 3**：在 `tool_blocks_by_index` 下方新增 `first_text` 标记，并在 `content_block_delta` 分支中扩展文本和思考链的流式渲染（替换原来的整个 `elif event.type == "content_block_delta":` 分支）：
 
-            # 启动 API 监听流
+```python
+# agent.py — _call_anthropic_stream 修改 3：文本流式渲染 + 思考链显示
+
+            tool_blocks_by_index: dict[int, dict] = {}
+            first_text = True  # 新增：标记是否为首个有效文本，用于控制 spinner 停止时机
+
             async with self._client.messages.stream(**create_params) as stream:
                 async for event in stream:
-                    if not hasattr(event, 'type'):
-                        continue
+                    # ... content_block_start 不变 ...
 
-                    # 工具调用块开始：初始化该工具的参数累积器
-                    if event.type == "content_block_start":
-                        cb = getattr(event, 'content_block', None)
-                        if cb and getattr(cb, 'type', None) == "tool_use":
-                            tool_blocks_by_index[event.index] = {
-                                "id": cb.id,
-                                "name": cb.name,
-                                "input_json": "",  # 逐步累积 JSON 参数片段
-                            }
                     elif event.type == "content_block_delta":
                         delta = event.delta
-                        # 捕获并清洗思考链（thinking）以及普通文本并实时流式渲染
+                        # 新增：捕获并渲染思考链（thinking）以及普通文本
                         if hasattr(delta, 'text'):
-                            # 首个文本到达时停止 spinner，切换到打字机模式
                             if first_text:
                                 stop_spinner()
-                                self._emit_text("\n")  # 首字输出前先换行
+                                self._emit_text("\n")
                                 first_text = False
                             self._emit_text(delta.text)
                         elif hasattr(delta, 'thinking'):
-                            # 思考链也实时显示，但标记为 [thinking]
                             if first_text:
                                 stop_spinner()
                                 self._emit_text("\n  [thinking] ")
                                 first_text = False
                             self._emit_text(delta.thinking)
                         elif hasattr(delta, 'partial_json'):
-                            # 累积工具调用的 JSON 参数片段
                             tb = tool_blocks_by_index.get(event.index)
                             if tb:
                                 tb["input_json"] += delta.partial_json
-                                
-                    elif event.type == "content_block_stop":
-                        # 工具块结束：解析完整 JSON 并触发回调（用于流式工具抢跑执行）
-                        tb = tool_blocks_by_index.pop(event.index, None)
-                        if tb and on_tool_block_complete:
-                            try:
-                                parsed = json.loads(tb["input_json"] or "{}")
-                            except Exception:
-                                parsed = {}  # JSON 解析失败时回退到空字典
-                            on_tool_block_complete({
-                                "type": "tool_use", "id": tb["id"],
-                                "name": tb["name"], "input": parsed,
-                            })
+
+                    # ... content_block_stop 不变 ...
+```
+
+**补丁 4**：在 `get_final_message()` 之后、`return` 之前，添加 thinking 块过滤：
+
+```python
+# agent.py — _call_anthropic_stream 修改 4：过滤 thinking 块
 
                 final_message = await stream.get_final_message()
 
-            # 【核心过滤】移除 thinking 块，防止其占用上下文窗口空间
+            # 【核心】移除 thinking 块，防止其占用上下文窗口空间
             final_message.content = [b for b in final_message.content if b.type != "thinking"]
             return final_message
-
-        # 使用步骤 4 实现的重试方法进行包裹，处理瞬时网络故障
-        return await _with_retry(_do)
-
+```
 
 #### 注意什么
 
 - **思考链与打字机 Spinner**：在 Anthropic 流式读取时，模型可能会先返回 `thinking` 类型的数据块进行思考。为了保证用户体验，我们必须在收到首个有效字符（无论是普通文本还是思考文本）时立即调用 `stop_spinner()` 来停止加载动画。
 - **工具定义获取**：使用 `get_tool_definitions()` 获取工具定义列表。第 12 课引入延迟工具后，会改用 `get_active_tool_definitions()` 过滤未激活的延迟工具。
-```
 
 ---
 
@@ -378,126 +321,125 @@ OpenAI 的流式格式和 Anthropic 大相径庭：
 ```python
 # agent.py（续）
 
+    async def _call_openai_stream(self) -> dict:
+        """OpenAI 后端流式调用：处理增量分片并实时渲染文本。"""
+        async def _do():
+            # 构建请求参数
+            create_params: dict[str, Any] = {
+                "model": self.backend.model,
+                "tools": _to_openai_tools(get_tool_definitions()),
+                "messages": self.history.openai_messages,
+                "stream": True,
+                "stream_options": {"include_usage": True},  # 要求返回 token 用量统计
+            }
 
-async def _call_openai_stream(self) -> dict:
-    """OpenAI 后端流式调用：处理增量分片并实时渲染文本。"""
-    async def _do():
-        # 构建请求参数
-        create_params: dict[str, Any] = {
-            "model": self.backend.model,
-            "tools": _to_openai_tools(get_tool_definitions()),
-            "messages": self.history.openai_messages,
-            "stream": True,
-            "stream_options": {"include_usage": True},  # 要求返回 token 用量统计
-        }
+            # 思考模式：通过 extra_body 传递 thinking 参数，通过 reasoning_effort 控制强度
+            if self.state.thinking_mode != "disabled":
+                create_params["reasoning_effort"] = os.environ.get(
+                    "THINKING_EFFORT", "high"
+                ).lower()
+                create_params["extra_body"] = {"thinking": {"type": "enabled"}}
 
-        # 思考模式：通过 extra_body 传递 thinking 参数，通过 reasoning_effort 控制强度
-        if self.state.thinking_mode != "disabled":
-            create_params["reasoning_effort"] = os.environ.get(
-                "THINKING_EFFORT", "high"
-            ).lower()
-            create_params["extra_body"] = {"thinking": {"type": "enabled"}}
+            # 启动 OpenAI 兼容端流式生成
+            stream = await self._client.chat.completions.create(**create_params)
 
-        # 启动 OpenAI 兼容端流式生成
-        stream = await self._client.chat.completions.create(**create_params)
+            content = ""  # 累积完整的回复文本
+            reasoning_content = ""  # DeepSeek 等模型的思维链内容
+            first_text = True  # 标记首个文本到达，用于控制 spinner 停止
+            reasoning_started = False  # 标记是否已开始输出思维链
+            tool_calls: dict[int, dict] = {}  # 按索引累积工具调用参数
+            finish_reason = ""
+            usage = None  # 用于记录最后一个 chunk 返回的 token 用量
 
-        content = ""  # 累积完整的回复文本
-        reasoning_content = ""  # DeepSeek 等模型的思维链内容
-        first_text = True  # 标记首个文本到达，用于控制 spinner 停止
-        reasoning_started = False  # 标记是否已开始输出思维链
-        tool_calls: dict[int, dict] = {}  # 按索引累积工具调用参数
-        finish_reason = ""
-        usage = None  # 用于记录最后一个 chunk 返回的 token 用量
+            async for chunk in stream:
+                # 捕获 usage 信息（通常在最后一个 chunk 中出现）
+                if chunk.usage:
+                    usage = {
+                        "prompt_tokens": chunk.usage.prompt_tokens,
+                        "completion_tokens": chunk.usage.completion_tokens,
+                    }
 
-        async for chunk in stream:
-            # 捕获 usage 信息（通常在最后一个 chunk 中出现）
-            if chunk.usage:
-                usage = {
-                    "prompt_tokens": chunk.usage.prompt_tokens,
-                    "completion_tokens": chunk.usage.completion_tokens,
-                }
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
 
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
+                # 1. 处理思维链内容（reasoning_content）
+                # DeepSeek 等模型通过 delta.reasoning_content 逐步推送思维链
+                if delta and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                    if not reasoning_started:
+                        stop_spinner()
+                        self._emit_text("\n  [thinking] ")
+                        reasoning_started = True
+                        first_text = False  # 思考开始后，后续 text 不再触发首字逻辑
+                    self._emit_text(delta.reasoning_content)
+                    reasoning_content += delta.reasoning_content
 
-            # 1. 处理思维链内容（reasoning_content）
-            # DeepSeek 等模型通过 delta.reasoning_content 逐步推送思维链
-            if delta and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                if not reasoning_started:
-                    stop_spinner()
-                    self._emit_text("\n  [thinking] ")
-                    reasoning_started = True
-                    first_text = False  # 思考开始后，后续 text 不再触发首字逻辑
-                self._emit_text(delta.reasoning_content)
-                reasoning_content += delta.reasoning_content
+                # 2. 处理正文输出文本，并进行流式刷新
+                if delta and delta.content:
+                    if first_text:
+                        stop_spinner()
+                        self._emit_text("\n")  # 首字输出前先换行
+                        first_text = False
+                    self._emit_text(delta.content)
+                    content += delta.content  # 累积完整文本用于历史记录
 
-            # 2. 处理正文输出文本，并进行流式刷新
-            if delta and delta.content:
-                if first_text:
-                    stop_spinner()
-                    self._emit_text("\n")  # 首字输出前先换行
-                    first_text = False
-                self._emit_text(delta.content)
-                content += delta.content  # 累积完整文本用于历史记录
+                # 3. 收集与累加工具调用参数分片
+                # OpenAI 的 tool_calls 被打碎成极小的 delta 片段，需要手动拼装
+                if delta and delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        existing = tool_calls.get(tc.index)
+                        if existing:
+                            # 已有该工具块，累加参数字符串片段
+                            if tc.function and tc.function.arguments:
+                                existing["arguments"] += tc.function.arguments
+                        else:
+                            # 初始化首个参数块（可能是 id/name/arguments 的任一片段先到）
+                            tool_calls[tc.index] = {
+                                "id": tc.id or "",
+                                "name": (tc.function.name if tc.function else "") or "",
+                                "arguments": (tc.function.arguments if tc.function else "") or "",
+                            }
 
-            # 3. 收集与累加工具调用参数分片
-            # OpenAI 的 tool_calls 被打碎成极小的 delta 片段，需要手动拼装
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    existing = tool_calls.get(tc.index)
-                    if existing:
-                        # 已有该工具块，累加参数字符串片段
-                        if tc.function and tc.function.arguments:
-                            existing["arguments"] += tc.function.arguments
-                    else:
-                        # 初始化首个参数块（可能是 id/name/arguments 的任一片段先到）
-                        tool_calls[tc.index] = {
-                            "id": tc.id or "",
-                            "name": (tc.function.name if tc.function else "") or "",
-                            "arguments": (tc.function.arguments if tc.function else "") or "",
-                        }
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
 
-            if chunk.choices[0].finish_reason:
-                finish_reason = chunk.choices[0].finish_reason
+            # 3. 按索引排序后拼装成标准 OpenAI 格式的工具对象结构
+            # 排序确保即使流式传输乱序，最终结构也严格对应
+            assembled = (
+                [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for _, tc in sorted(tool_calls.items())
+                ]
+                if tool_calls
+                else None
+            )
 
-        # 3. 按索引排序后拼装成标准 OpenAI 格式的工具对象结构
-        # 排序确保即使流式传输乱序，最终结构也严格对应
-        assembled = (
-            [
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                }
-                for _, tc in sorted(tool_calls.items())
-            ]
-            if tool_calls
-            else None
-        )
+            # 构建返回消息体，包含 reasoning_content（如有）
+            message: dict[str, Any] = {
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": assembled,
+            }
+            if reasoning_content:
+                message["reasoning_content"] = reasoning_content
 
-        # 构建返回消息体，包含 reasoning_content（如有）
-        message: dict[str, Any] = {
-            "role": "assistant",
-            "content": content or None,
-            "tool_calls": assembled,
-        }
-        if reasoning_content:
-            message["reasoning_content"] = reasoning_content
+            # 返回统一的数据包供外层主循环更新历史
+            return {
+                "choices": [
+                    {
+                        "message": message,
+                        "finish_reason": finish_reason or "stop",
+                    }
+                ],
+                "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0},
+            }
 
-        # 返回统一的数据包供外层主循环更新历史
-        return {
-            "choices": [
-                {
-                    "message": message,
-                    "finish_reason": finish_reason or "stop",
-                }
-            ],
-            "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0},
-        }
-
-    return await _with_retry(_do)
-
+        return await _with_retry(_do)
+```
 
 #### 注意什么
 
@@ -510,7 +452,6 @@ async def _call_openai_stream(self) -> dict:
   - `extra_body={"thinking": {"type": "enabled"}}`：启用思考模式的开关
   - 注意：这两个参数需要通过 `extra_body` 传递，因为 OpenAI SDK 的标准参数中没有 `thinking` 字段
 - **思维链内容处理**：DeepSeek 等模型通过 `delta.reasoning_content` 逐步推送思维链内容，与 `delta.content`（正文）同级。我们在流式渲染时先显示 `[thinking]` 标记，再逐字输出思维链，最后输出正文
-```
 
 ---
 
@@ -549,7 +490,7 @@ def _is_retryable(error: Exception) -> bool:
     return False
 
 
-async def _with_retry(fn, max_retries: int = 3):
+async def _with_retry(fn, max_retries: int = 3) -> Any:
     """带指数退避和随机抖动的重试封装，防止重试风暴。"""
     for attempt in range(max_retries + 1):
         try:
@@ -568,12 +509,11 @@ async def _with_retry(fn, max_retries: int = 3):
             print_retry(attempt + 1, max_retries, reason)
             
             await asyncio.sleep(delay)
-
+```
 
 #### 注意什么
 
 - **避免惊群效应（Thundering Herd）**：在重试机制中加入随机抖动（Jitter）至关重要。当大批客户端同时因云端 API 限流（如 429）或网络瞬断而请求失败时，如果它们都采用整秒指数退避（例如 1s, 2s, 4s），它们会在相同的秒数切片处再次并发轰炸网关。加上 0 到 1 秒之间的随机抖动值 `jitter`，可以有效错开各客户端的实际重试时点，平滑流量波峰。
-```
 
 ---
 
