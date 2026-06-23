@@ -674,7 +674,7 @@ async def execute_tool(
                 return f"Error: You must read this file before {verb}. Use read_file first to see its current contents."
             if os.path.getmtime(abs_path) != read_file_state[abs_path]:
                 verb = "writing" if name == "write_file" else "editing"
-                return f"Warning: {file_path} was modified externally since your last read. Please read_file again before {verb}."
+                return f"Warning: {abs_path} was modified externally since your last read. Please read_file again before {verb}."
 
     # tool_search: activate deferred tools and return their schemas
     if name == "tool_search":

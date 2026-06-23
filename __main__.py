@@ -5,6 +5,7 @@ import argparse
 from agent import Agent, BackendConfig
 from session import load_session, get_latest_session_id
 from ui import print_welcome, print_user_prompt, print_error, print_info
+from tools import PermissionMode
 
 
 def parse_args() -> argparse.Namespace:
@@ -14,6 +15,16 @@ def parse_args() -> argparse.Namespace:
         description="Mini Claude Code — a minimal coding agent",
         add_help=False,  # 手动处理 --help 以自定义格式
     )
+    # 权限控制参数（第 08 课新增）
+    parser.add_argument("--yolo", "-y", action="store_true",
+                        help="Skip all confirmation prompts")
+    parser.add_argument("--plan", action="store_true",
+                        help="Plan mode: read-only")
+    parser.add_argument("--accept-edits", action="store_true",
+                        help="Auto-approve file edits")
+    parser.add_argument("--dont-ask", action="store_true",
+                        help="Auto-deny confirmations (for CI)")
+
     parser.add_argument("prompt", nargs="*", help="One-shot prompt")
     parser.add_argument("--model", "-m", default=None, help="Model to use")
     parser.add_argument("--api-base", default=None,
@@ -24,9 +35,23 @@ def parse_args() -> argparse.Namespace:
                         help="Show help")
     return parser.parse_args()
 
+def _resolve_permission_mode(args: argparse.Namespace) -> PermissionMode:
+    """将命令行权限参数映射为 Agent 内部权限模式字符串。"""
+    if args.yolo:
+        return "bypassPermissions"
+    elif args.plan:
+        return "plan"
+    elif args.accept_edits:
+        return "acceptEdits"
+    elif args.dont_ask:
+        return "dontAsk"
+    else:
+        return "default"
+
 def main() -> None:
     """程序主入口：解析参数、初始化 Agent、决定单次/交互模式。"""
     args = parse_args()
+    permission_mode = _resolve_permission_mode(args)
 
     if args.help:
         print("""
@@ -63,7 +88,7 @@ Examples:
         print_error(str(e))
         sys.exit(1)
 
-    agent = Agent(backend=backend)
+    agent = Agent(backend=backend, permission_mode=permission_mode)
 
     # --resume 模式：恢复最近一次会话的历史消息
     if args.resume:
@@ -100,6 +125,16 @@ Examples:
 async def run_repl(agent: Agent) -> None:
     """交互式 REPL 循环：读取用户输入、分发命令。"""
     print_welcome()
+
+    async def confirm_fn(message: str) -> bool:
+        """确认回调：Agent 在需要用户授权时暂停执行并等待终端输入 y/n。"""
+        try:
+            answer = input("  Allow? (y/n): ")
+            return answer.lower().startswith("y")
+        except EOFError:
+            return False
+        
+    agent.set_confirm_fn(confirm_fn)
 
     while True:
         print_user_prompt()

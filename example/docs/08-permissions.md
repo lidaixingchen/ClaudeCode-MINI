@@ -395,6 +395,7 @@ class AgentState:
     # 第 8 课新增的字段
     confirmed_paths: set[str] = field(default_factory=set)  # 已确认的路径白名单
     current_task: asyncio.Task | None = None  # 当前正在执行的任务
+    plan_file_path: str | None = None  # 磁盘上 Plan Markdown 文件的绝对路径（第 12 课详述）
 
 
 @dataclass
@@ -420,8 +421,8 @@ class Agent:
         """设置确认回调函数（供 REPL 注入 y/n 确认逻辑）"""
         self.confirm_fn = fn
 
-    # 弹窗询问用户是否允许危险操作，返回 True/False
     async def _confirm_dangerous(self, command: str) -> bool:
+        """弹窗询问用户是否允许危险操作，返回 True/False。"""
         print_confirmation(command)
         if self.confirm_fn:
             return await self.confirm_fn(command)
@@ -492,7 +493,128 @@ class Agent:
                         early_executions[block["id"]] = task
 ```
 
-最后，在 `__main__.py` 的 REPL 中注入确认回调：
+对于 OpenAI 后端，需要先添加两个前置依赖，然后将工具处理逻辑重构为独立的 `_process_openai_tools` 方法：
+
+**前置依赖 1：在 `AgentState` 中添加缺失的属性**
+
+```python
+# agent.py -> AgentState 类
+
+@dataclass
+class AgentState:
+    """Agent 的运行时状态"""
+    thinking_mode: Literal["disabled", "adaptive", "enabled"] = "disabled"
+    confirmed_paths: set[str] = field(default_factory=set)
+    current_task: asyncio.Task | None = None
+    plan_file_path: str | None = None
+    aborted: bool = False  # 新增：中断标志位
+    context_cleared: bool = False  # 新增：上下文是否被清除的标志
+```
+
+**前置依赖 2：在 `MessageHistory` 中添加 `append_openai_tool_message` 方法**
+
+```python
+# agent.py -> MessageHistory 类
+
+    def append_openai_tool_message(self, tool_call_id: str, content: str) -> None:
+        """添加 OpenAI 格式的工具结果消息。"""
+        self._openai_messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        })
+```
+
+**然后，修改 `_chat_openai` 方法并新增 `_process_openai_tools` 方法：**
+
+```python
+# agent.py -> _chat_openai 方法中修改工具调用部分
+
+            # 5. 处理工具调用（重构为独立方法）
+            if message.get("tool_calls"):
+                context_break = await self._process_openai_tools(message["tool_calls"])
+                if context_break:
+                    break
+
+
+# agent.py -> 新增 _process_openai_tools 方法
+
+    async def _process_openai_tools(self, tool_calls: list[dict]) -> bool:
+        """处理 OpenAI 工具调用，返回 True 表示上下文已被清除。"""
+        # 阶段 1：解析并检查权限（串行）
+        oai_checked: list[dict] = []
+        for tc in tool_calls:
+            if self.state.aborted:
+                break
+            if tc.get("type") != "function":
+                continue
+            fn_name = tc["function"]["name"]
+            try:
+                inp = json.loads(tc["function"]["arguments"])
+            except Exception:
+                inp = {}
+
+            print_tool_call(fn_name, inp)
+
+            # 执行权限评估
+            perm = check_permission(fn_name, inp, self.config.permission_mode, self.state.plan_file_path)
+            if perm["action"] == "deny":
+                print_info(f"Denied: {perm.get('message', '')}")
+                oai_checked.append({"tc": tc, "fn": fn_name, "inp": inp, "allowed": False, "result": f"Action denied: {perm.get('message', '')}"})
+                continue
+            if perm["action"] == "confirm" and perm.get("message") and perm["message"] not in self.state.confirmed_paths:
+                confirmed = await self._confirm_dangerous(perm["message"])
+                if not confirmed:
+                    oai_checked.append({"tc": tc, "fn": fn_name, "inp": inp, "allowed": False, "result": "User denied this action."})
+                    continue
+                self.state.confirmed_paths.add(perm["message"])
+            oai_checked.append({"tc": tc, "fn": fn_name, "inp": inp, "allowed": True})
+
+        # 阶段 2：分组执行（连续安全工具可并行）
+        oai_batches: list[dict] = []
+        for ct in oai_checked:
+            safe = ct["allowed"] and ct["fn"] in CONCURRENCY_SAFE_TOOLS
+            if safe and oai_batches and oai_batches[-1]["concurrent"]:
+                oai_batches[-1]["items"].append(ct)
+            else:
+                oai_batches.append({"concurrent": safe, "items": [ct]})
+
+        for batch in oai_batches:
+            if self.state.context_cleared or self.state.aborted:
+                break
+
+            if batch["concurrent"]:
+                # 并发执行安全工具
+                async def _run_oai_safe(ct_item: dict) -> tuple[dict, str]:
+                    raw = await self._execute_tool_call(ct_item["fn"], ct_item["inp"])
+                    res = self._persist_large_result(ct_item["fn"], raw)
+                    print_tool_result(ct_item["fn"], res)
+                    return ct_item, res
+
+                results = await asyncio.gather(*[_run_oai_safe(ct) for ct in batch["items"]])
+                for ct_item, res in results:
+                    self.history.append_openai_tool_message(ct_item["tc"]["id"], res)
+            else:
+                # 串行执行：处理被拒绝的和普通工具
+                for ct in batch["items"]:
+                    if not ct["allowed"]:
+                        self.history.append_openai_tool_message(ct["tc"]["id"], ct["result"])
+                        continue
+                    raw = await self._execute_tool_call(ct["fn"], ct["inp"])
+                    res = self._persist_large_result(ct["fn"], raw)
+                    print_tool_result(ct["fn"], res)
+
+                    if self.state.context_cleared:
+                        self.state.context_cleared = False
+                        self.history.append_user_message(res)
+                        return True
+                    self.history.append_openai_tool_message(ct["tc"]["id"], res)
+
+        self.state.context_cleared = False
+        return False
+```
+
+最后，在 `__main__.py` 的 REPL 中注入确认回调。`confirm_fn` 定义在 `run_repl` 函数内、`while True` 循环外：
 
 ```python
 # __main__.py 中的修改
@@ -500,6 +622,7 @@ class Agent:
 async def run_repl(agent: Agent) -> None:
     """交互式 REPL 循环：读取用户输入、分发命令。"""
 
+    # 【新增】定义确认回调函数（在循环外，只定义一次）
     async def confirm_fn(message: str) -> bool:
         """确认回调：Agent 在需要用户授权时暂停执行并等待终端输入 y/n。"""
         try:
@@ -509,7 +632,16 @@ async def run_repl(agent: Agent) -> None:
             return False
 
     agent.set_confirm_fn(confirm_fn)  # 注入确认回调
-    # ... 其余 REPL 逻辑不变
+
+    # 【原有】REPL 主循环
+    while True:
+        print_user_prompt()
+        try:
+            line = input()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye!\n")
+            break
+        # ... 其余 REPL 逻辑不变
 ```
 
 #### 注意什么

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from anthropic.types import MessageParam, ToolUseBlockParam, TextBlockParam, ToolResultBlockParam
@@ -22,6 +22,7 @@ from session import save_session  # 导入会话保存函数
 from dotenv import load_dotenv
 
 from ui import print_tool_call, print_tool_result, print_assistant_text, stop_spinner, print_retry 
+from tools import check_permission  # 导入权限检查引擎
 
 #加载环境变量
 load_dotenv()
@@ -162,12 +163,17 @@ class BackendConfig:
 @dataclass
 class AgentConfig:
     """Agent 行为配置（不含后端信息）"""
-    pass
+    permission_mode: str = "default"  # 权限模式：default, plan, acceptEdits, bypassPermissions, dontAsk
 
 @dataclass
 class AgentState:
     """Agent 的运行时状态"""
     thinking_mode: Literal["disabled", "adaptive", "enabled"] = "disabled"
+    confirmed_paths: set[str] = field(default_factory=set)  # 已确认的路径白名单
+    current_task: asyncio.Task | None = None  # 当前正在执行的任务
+    plan_file_path: str | None = None  # 磁盘上 Plan Markdown 文件的绝对路径
+    context_cleared: bool = False  # 新增：上下文是否被清除的标志
+    aborted: bool = False  # 新增：中断标志位
 
 class MessageHistory:
     """统一 Anthropic/OpenAI 消息格式的抽象层"""
@@ -250,6 +256,14 @@ class MessageHistory:
             self._openai_messages.append({"role": "system", "content": self.system_prompt})
         else:
             self._openai_messages.clear()
+
+    def append_openai_tool_message(self, tool_call_id: str, content: str) -> None:
+        """添加 OpenAI 格式的工具结果消息。"""
+        self._openai_messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        })
             
 def _to_openai_tools(tools: list[dict]) -> list[dict]:
     """将 Anthropic 格式的工具定义转换为 OpenAI 格式
@@ -271,11 +285,12 @@ def _to_openai_tools(tools: list[dict]) -> list[dict]:
 
 
 class Agent:
-    def __init__(self, backend: BackendConfig):
+    def __init__(self, backend: BackendConfig, permission_mode: str = "default"):
         self.backend = backend
-        self.config = AgentConfig()
+        self.config = AgentConfig(permission_mode=permission_mode)
         self.state = AgentState(thinking_mode=self._resolve_thinking_mode())
         self.use_openai = backend.is_openai
+        self.confirm_fn = None  # 权限确认回调函数，后续可注入自定义实现
 
         # 初始化消息历史管理器，负责统一格式化两种协议的消息结构
         system_prompt = "You are a helpful coding assistant with access to tools."
@@ -294,6 +309,11 @@ class Agent:
         # 流式输出缓冲区，用于在流式模式下收集助手文本，直到完整输出结束
         self._output_buffer: list[str] | None = None
 
+    @property
+    def is_processing(self) -> bool:
+        """判断 Agent 是否正在执行任务（供 SIGINT 信号处理器使用）"""
+        return self.state.current_task is not None and not self.state.current_task.done()
+
     def _resolve_thinking_mode(self) -> Literal["disabled", "adaptive", "enabled"]:
         """根据 THINKING_MODE 环境变量解析思考模式。"""
         mode = os.environ.get("THINKING_MODE", "disabled").lower()
@@ -304,6 +324,22 @@ class Agent:
     def abort(self) -> None:
         """设置中断标志，供信号处理器调用以终止当前任务。"""
         self._aborted = True
+
+    def set_confirm_fn(self, fn) -> None:
+        """设置确认回调函数（供 REPL 注入 y/n 确认逻辑）"""
+        self.confirm_fn = fn
+
+    async def _confirm_dangerous(self, command: str) -> bool:
+        """弹窗询问用户是否允许危险操作，返回 True/False。"""
+        print(f"\n  [red]⚠️  Command requires confirmation: {command}[/red]")
+        if self.confirm_fn:
+            return await self.confirm_fn(command)
+        try:
+            answer = input("  Type 'y' to confirm, anything else to cancel: ")
+            return answer.lower().startswith("y")
+        except KeyboardInterrupt:
+            print("\n  [red]Operation cancelled.[/red]")
+            return False
 
     async def chat(self, user_message: str) -> None:
         """封装公共的对外对话方法，提供自动保存和异常隔离。"""
@@ -366,10 +402,14 @@ class Agent:
             def _on_tool_block_complete(block: dict):
                 # 只有白名单中的只读工具才允许抢跑
                 if block["name"] in CONCURRENCY_SAFE_TOOLS:
-                    # TODO: 第 8 课会添加权限检查逻辑（check_permission）
-                    # 目前只读工具直接允许执行
-                    task = asyncio.create_task(self._execute_tool_call(block["name"], block["input"]))
-                    early_executions[block["id"]] = task
+                    # 权限检查：即使工具在白名单中，仍需验证用户是否授权
+                    perm = check_permission(
+                        block["name"], block["input"], self.config.permission_mode, self.state.plan_file_path
+                    )
+                    if perm["action"] == "allow":
+                        # 安全且获授权，启动抢跑任务
+                        task = asyncio.create_task(self._execute_tool_call(block["name"], block["input"]))
+                        early_executions[block["id"]] = task
 
             # 将回调传入流式 API 调用，每个工具块完成时都会触发
             response = await self._call_anthropic_stream(on_tool_block_complete=_on_tool_block_complete)
@@ -388,7 +428,36 @@ class Agent:
             for tu in tool_uses:
                 inp = dict(tu.input) if hasattr(tu.input, "items") else tu.input
 
-                # 1. 检查此工具是否已在后台抢跑执行
+                perm = check_permission(
+                    tu.name, inp, self.config.permission_mode, self.state.plan_file_path
+                )
+                # 命中 Deny 拦截：返回错误消息给模型，让其自适应调整策略
+                if perm == "deny":
+                    print(f"  [red]✗ Action Denied: {perm.get('message')}[/red]")
+                    # 关键设计：将拒绝消息作为 tool_result 返回，而非抛异常终止会话
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tu.id,
+                        "content": f"Action denied: {perm.get('message')}",
+                    })
+                    continue
+
+                # 命中 Confirm：需弹窗二次确认
+                if perm == "confirm":
+                    confirm_key = perm["message"]  # 以提示消息作为确认的唯一标识
+                    if confirm_key not in self.state.confirmed_paths:
+                        allowed = await self._confirm_dangerous(confirm_key)
+                        if not allowed:
+                            print(f"  [red]✗ Action Denied by User.[/red]")
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tu.id,
+                                "content": "Action denied by user.",
+                            })
+                            continue
+                        self.state.confirmed_paths.add(confirm_key)
+
+                #  检查此工具是否已在后台抢跑执行
                 early_task = early_executions.get(tu.id)
                 if early_task:
                     # 抢跑任务静默运行，此时才渲染 UI 日志（避免与流式文本混杂）
@@ -405,7 +474,7 @@ class Agent:
                     })
                     continue
 
-                # 2. 非安全工具（write_file/run_shell 等）走常规同步执行
+                #  非安全工具（write_file/run_shell 等）走常规同步执行
                 print_tool_call(tu.name, inp)
                 raw = await self._execute_tool_call(tu.name, inp)
                 res = self._persist_large_result(tu.name, raw)
@@ -464,23 +533,88 @@ class Agent:
                 break
 
             # 5. 执行工具并将结果（role: "tool"）推入历史
-            tool_results = []
-            for tc in message["tool_calls"]:
-                # arguments 是 JSON 字符串，需要解析为 dict
-                try:
-                    args = json.loads(tc["function"]["arguments"])
-                except Exception:
-                    args = {}  # 解析失败时用空 dict，让工具自行处理缺失参数
+            if message.get("tool_calls"):
+                context_break = await self._process_openai_tools(message["tool_calls"])
+                if context_break:
+                    break
 
-                result = await execute_tool(tc["function"]["name"], args)
-                tool_results.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],  # 必须与 assistant 消息中的 tool_calls.id 对应
-                    "name": tc["function"]["name"],
-                    "content": result,
-                })
-            self.history.messages.extend(tool_results)  # 直接 extend，因为 OpenAI 模式下工具结果也是 role: "tool" 消息
-    
+    async def _process_openai_tools(self, tool_calls: list[dict]) -> bool:
+        """处理 OpenAI 工具调用，返回 True 表示上下文已被清除。"""
+        # 阶段 1：解析并检查权限（串行）
+        oai_checked: list[dict] = []  
+        for tc in tool_calls:
+            if self._aborted:
+                break
+            if tc.get("type") != "function":
+                continue
+            fn_name = tc.get("function", {}).get("name")
+            try:
+                inp = json.loads(tc.get("function", {}).get("arguments", "{}"))
+            except Exception:
+                inp = {}
+
+            print_tool_call(fn_name, inp)
+
+            # 执行权限评估
+            perm = check_permission(
+                fn_name, inp, self.config.permission_mode, self.state.plan_file_path
+            )    
+            if perm["action"] == "deny":
+                print(f"  [red]✗ Action Denied: {perm.get('message')}[/red]")
+                oai_checked.append({"tc": tc, "fn": fn_name, "inp": inp, "allowed": False, "result": f"Action denied: {perm.get('message', '')}"})
+                continue
+            if perm["action"] == "confirm" and perm["message"] not in self.state.confirmed_paths:
+                confirmed = await self._confirm_dangerous(perm["message"])
+                if not confirmed:
+                    print(f"  [red]✗ Action Denied by User.[/red]")
+                    oai_checked.append({"tc": tc, "fn": fn_name, "inp": inp, "allowed": False, "result": "Action denied by user."})
+                    continue
+                self.state.confirmed_paths.add(perm["message"])
+            oai_checked.append({"tc": tc, "fn": fn_name, "inp": inp, "allowed": True})
+
+            # 阶段 2：分组执行（连续安全工具可并行）
+        oai_batches: list[dict] = []
+        for ct in oai_checked:
+            safe = ct["allowed"] and ct["fn"] in CONCURRENCY_SAFE_TOOLS
+            if safe and oai_batches and oai_batches[-1]["concurrent"]:
+                oai_batches[-1]["items"].append(ct)
+            else:
+                oai_batches.append({"concurrent": safe, "items": [ct]})
+
+        for batch in oai_batches:
+            if self.state.context_cleared or self.state.aborted:
+                break
+
+            if batch["concurrent"]:
+                # 并发执行安全工具
+                async def _run_oai_safe(ct_item: dict) -> tuple[dict, str]:
+                    raw = await self._execute_tool_call(ct_item["fn"], ct_item["inp"])
+                    res = self._persist_large_result(ct_item["fn"], raw)
+                    print_tool_result(ct_item["fn"], res)
+                    return ct_item, res
+
+                results = await asyncio.gather(*[_run_oai_safe(ct) for ct in batch["items"]])
+                for ct_item, res in results:
+                    self.history.append_openai_tool_message(ct_item["tc"]["id"], res)
+            else:
+                # 串行执行：处理被拒绝的和普通工具
+                for ct in batch["items"]:
+                    if not ct["allowed"]:
+                        self.history.append_openai_tool_message(ct["tc"]["id"], ct["result"])
+                        continue
+                    raw = await self._execute_tool_call(ct["fn"], ct["inp"])
+                    res = self._persist_large_result(ct["fn"], raw)
+                    print_tool_result(ct["fn"], res)
+
+                    if self.state.context_cleared:
+                        self.state.context_cleared = False
+                        self.history.append_user_message(res)
+                        return True
+                    self.history.append_openai_tool_message(ct["tc"]["id"], res)
+
+        self.state.context_cleared = False
+        return False
+
     def _persist_large_result(self, tool_name: str, result: str) -> str:
         """当工具结果超过阈值时，将完整内容保存到磁盘并返回预览摘要。"""
         # 小结果直接返回，避免不必要的磁盘 IO
