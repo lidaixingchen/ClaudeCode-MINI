@@ -24,9 +24,8 @@
 
 1. **确定并发安全工具集**：明确哪些工具（如只读文件操作）可以安全地异步并行执行。
 2. **实现流式 API 监听与回调**：实现 `_call_anthropic_stream`，在流式生成期间解析 `tool_use` 并在块结束时触发 `_on_tool_block_complete`。
-3. **实现大结果持久化**：添加 `_persist_large_result` 方法，当工具返回超过 30KB 的结果时自动保存到磁盘并只保留预览摘要。
-4. **构建后台抢跑任务注册表**：在 `_chat_anthropic` 核心循环中引入 `early_executions` 字典，启动后台异步任务。
-5. **重构工具处理循环接收结果**：在获取回复后，对已抢跑的工具任务直接进行 `await`，未抢跑的工具则走常规同步调用。
+3. **构建后台抢跑任务注册表**：在 `_chat_anthropic` 核心循环中引入 `early_executions` 字典，启动后台异步任务。
+4. **重构工具处理循环接收结果**：在获取回复后，对已抢跑的工具任务直接进行 `await`，未抢跑的工具则走常规同步调用。
 
 ---
 
@@ -63,7 +62,7 @@ CONCURRENCY_SAFE_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch"}
 ```python
 # agent.py 中的导入修改
 
-import asyncio                  # 步骤 4 需要 asyncio.create_task 实现异步抢跑
+import asyncio                  # 步骤 3 需要 asyncio.create_task 实现异步抢跑
 import json                     # 步骤 2 的 _call_anthropic_stream 中需要 json.loads 解析工具参数
 from tools import (
     tool_definitions,
@@ -71,7 +70,7 @@ from tools import (
     get_tool_definitions,       # 教学简化版，第 12 课起替换为 get_active_tool_definitions()
     CONCURRENCY_SAFE_TOOLS,     # 并发安全工具白名单，用于判断是否可以异步抢跑
 )
-from ui import print_tool_call, print_tool_result  # 工具调用的 UI 渲染（步骤 5 会用到）
+from ui import print_tool_call, print_tool_result  # 工具调用的 UI 渲染（步骤 4 会用到）
 ```
 
 ---
@@ -208,58 +207,7 @@ response = await self._client.messages.create(
 
 ---
 
-### 步骤 3（插曲）：大结果持久化 `_persist_large_result`
-
-#### 为什么做
-
-当 Agent 执行工具（如 `run_shell` 运行了一条产生大量输出的命令，或 `read_file` 读取了一个巨大的文件），返回的结果可能高达几十甚至上百 KB。如果将这些原始文本直接塞入 API 请求的消息历史，会迅速撑爆上下文窗口，触发昂贵的压缩甚至导致请求失败。我们需要一个"溢出阀"：当结果超过阈值时，将完整内容保存到磁盘，只在消息历史中保留一个预览摘要。
-
-#### 做什么
-
-在 `agent.py` 的 `Agent` 类中添加 `_persist_large_result` 方法：
-
-```python
-# agent.py — 大结果持久化
-
-LARGE_RESULT_THRESHOLD = 30 * 1024      # 30 KB 阈值，超过则持久化到磁盘
-LARGE_RESULT_PREVIEW_LINES = 200        # 预览保留的行数
-
-
-    def _persist_large_result(self, tool_name: str, result: str) -> str:
-        """当工具结果超过阈值时，将完整内容保存到磁盘并返回预览摘要。"""
-        # 小结果直接返回，避免不必要的磁盘 IO
-        if len(result.encode()) <= LARGE_RESULT_THRESHOLD:
-            return result
-        # 创建工具结果存储目录
-        d = Path.cwd() / ".mini-claude" / "tool-results"
-        d.mkdir(parents=True, exist_ok=True)
-        # 文件名包含毫秒时间戳和工具名，便于事后追溯
-        filename = f"{int(time.time() * 1000)}-{tool_name}.txt"
-        filepath = d / filename
-        filepath.write_text(result, encoding="utf-8")
-
-        lines = result.split("\n")
-        preview = "\n".join(lines[:LARGE_RESULT_PREVIEW_LINES])
-        # 使用字节数而非字符数衡量，确保中文等多字节字符被正确计算
-        size_kb = len(result.encode()) / 1024
-
-        return (
-            f"[Result too large ({size_kb:.1f} KB, {len(lines)} lines). "
-            f"Full output saved to {filepath}. "
-            f"You can use read_file to see the full result.]\n\n"
-            f"Preview (first {LARGE_RESULT_PREVIEW_LINES} lines):\n{preview}"
-        )
-```
-
-#### 注意什么
-
-- 阈值以**字节数**（`len(result.encode())`）而非字符数衡量，因为中文字符占 3 字节，确保对多语言内容一视同仁。
-- 持久化目录 `./.mini-claude/tool-results` 会在首次调用时自动创建，文件名包含毫秒时间戳和工具名，便于事后追溯。
-- 返回给 Agent 的预览摘要仍然包含足够信息让模型理解输出内容，同时大幅降低了 token 消耗。
-
----
-
-### 步骤 4：构建后台抢跑任务注册表 `early_executions`
+### 步骤 3：构建后台抢跑任务注册表 `early_executions`
 
 #### 为什么做
 
@@ -285,7 +233,8 @@ async def _execute_tool_call(self, name: str, args: dict) -> str:
         self.history.append_user_message(user_message)
 
         while True:
-            current_system_prompt = build_system_prompt()
+            # 动态编译最新的系统提示词，赋值给实例属性供流式调用使用
+            self._system_prompt = build_system_prompt()
 
             # 抢跑任务注册表：{ tool_use_id -> asyncio.Task }
             # 用于在流式结束后直接 await 已启动的后台任务
@@ -313,7 +262,7 @@ async def _execute_tool_call(self, name: str, args: dict) -> str:
 
 ---
 
-### 步骤 5：重构工具处理循环接收结果
+### 步骤 4：重构工具处理循环接收结果
 
 #### 为什么做
 
@@ -347,26 +296,24 @@ async def _execute_tool_call(self, name: str, args: dict) -> str:
                     print_tool_call(tu.name, inp)
                     # await 可能已完成的任务，几乎零等待
                     raw = await early_task
-                    res = self._persist_large_result(tu.name, raw)
-                    print_tool_result(tu.name, res)
+                    print_tool_result(tu.name, raw)
 
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tu.id,
-                        "content": res,
+                        "content": raw,
                     })
                     continue
 
                 # 2. 非安全工具（write_file/run_shell 等）走常规同步执行
                 print_tool_call(tu.name, inp)
                 raw = await self._execute_tool_call(tu.name, inp)
-                res = self._persist_large_result(tu.name, raw)
-                print_tool_result(tu.name, res)
+                print_tool_result(tu.name, raw)
 
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
-                    "content": res,
+                    "content": raw,
                 })
 
             # 将所有工具执行结果追加到历史，供下一轮对话使用

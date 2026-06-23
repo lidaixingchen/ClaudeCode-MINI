@@ -928,15 +928,35 @@ class Agent:
         utilization = self.state.last_input_token_count / self.effective_window if self.effective_window else 0
         if utilization < SNIP_THRESHOLD:
             return
-        tool_msgs = []
+
+        results = []
         for i, msg in enumerate(self.history.openai_messages):
             if msg.get("role") == "tool" and isinstance(msg.get("content"), str) and msg["content"] != SNIP_PLACEHOLDER:
-                tool_msgs.append(i)
-        if len(tool_msgs) <= KEEP_RECENT_RESULTS:
+                tool_call_id = msg.get("tool_call_id", "")
+                tool_info = self._find_tool_call_by_id(tool_call_id)
+                if tool_info and tool_info["name"] in SNIPPABLE_TOOLS:
+                    results.append({"i": i, "name": tool_info["name"], "file_path": tool_info.get("arguments", {}).get("path")})
+
+        if len(results) <= KEEP_RECENT_RESULTS:
             return
-        snip_count = len(tool_msgs) - KEEP_RECENT_RESULTS
-        for i in range(snip_count):
-            self.history.openai_messages[tool_msgs[i]]["content"] = SNIP_PLACEHOLDER
+
+        to_snip = set()
+        seen_files: dict[str, list[int]] = {}
+        for idx, r in enumerate(results):
+            if r["name"] == "read_file" and r.get("file_path"):
+                seen_files.setdefault(r["file_path"], []).append(idx)
+
+        for indices in seen_files.values():
+            if len(indices) > 1:
+                for j in indices[:-1]:
+                    to_snip.add(j)
+
+        snip_before = len(results) - KEEP_RECENT_RESULTS
+        for i in range(snip_before):
+            to_snip.add(i)
+
+        for idx in to_snip:
+            self.history.openai_messages[results[idx]["i"]]["content"] = SNIP_PLACEHOLDER
 
     # Tier 3: Microcompact
     def _microcompact_anthropic(self) -> None:
@@ -972,6 +992,16 @@ class Agent:
             for block in msg["content"]:
                 if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") == tool_use_id:
                     return {"name": block["name"], "input": block.get("input", {})}
+        return None
+
+    def _find_tool_call_by_id(self, tool_call_id: str) -> dict | None:
+        """根据 tool_call_id 在 OpenAI 历史中反向查找对应的工具调用（用于 Tier 2 判断工具类型）。"""
+        for msg in self.history.openai_messages:
+            if msg.get("role") != "assistant" or "tool_calls" not in msg:
+                continue
+            for tc in msg["tool_calls"]:
+                if tc.get("id") == tool_call_id:
+                    return {"name": tc["function"]["name"], "arguments": tc["function"].get("arguments_parsed", {})}
         return None
 
     # ─── Large result persistence ─────────────────────────────────

@@ -554,13 +554,10 @@ def _matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
     if rule["pattern"] is None:
         return True
 
-    value = ""
-    if tool_name == "run_shell":
-        value = inp.get("command", "")
-    elif "file_path" in inp:
-        value = inp["file_path"]
-    else:
-        return True
+    # 统一提取用于匹配的值：run_shell 用 command，其余工具用 file_path 或 path
+    value = inp.get("command") or inp.get("file_path") or inp.get("path", "")
+    if not value:
+        return True  # 没有可匹配的值时，视为匹配所有规则
 
     pattern = rule["pattern"]
     if pattern.endswith("*"):

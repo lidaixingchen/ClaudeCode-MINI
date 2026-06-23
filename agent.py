@@ -21,7 +21,7 @@ from session import save_session  # 导入会话保存函数
 
 from dotenv import load_dotenv
 
-from ui import print_tool_call, print_tool_result, print_assistant_text, stop_spinner, print_retry 
+from ui import print_info, print_tool_call, print_tool_result, print_assistant_text, stop_spinner, print_retry 
 from tools import check_permission  # 导入权限检查引擎
 
 #加载环境变量
@@ -29,6 +29,19 @@ load_dotenv()
 
 LARGE_RESULT_THRESHOLD = 30 * 1024      # 30 KB 阈值，超过则持久化到磁盘
 LARGE_RESULT_PREVIEW_LINES = 200        # 预览保留的行数
+
+# ─── Constants ──────────────────────────────────────────────
+CONTEXT_WINDOW_SAFETY_MARGIN = 20000  # 窗口安全边界 (Tokens)，为系统提示词和回复预留空间
+AUTOCOMPACT_THRESHOLD = 0.85          # 触发自动压缩的阈值 (85%)，防止窗口爆满
+LARGE_RESULT_THRESHOLD = 30 * 1024     # 大结果文件持久化阈值 (30 KB)，超过则保存到本地文件
+LARGE_RESULT_PREVIEW_LINES = 200       # 大结果文件预览行数，只保留前 200 行在历史中
+
+# ─── Tier 2 compression constants ───────────────────────────
+SNIPPABLE_TOOLS = {"read_file", "grep_search", "list_files", "run_shell"}  # 可被裁剪的工具（输出通常冗长）
+SNIP_PLACEHOLDER = "[Content snipped - re-read if needed]"  # 裁剪后的占位符文本
+SNIP_THRESHOLD = 0.60  # 利用率超过 60% 时触发 Tier 2 压缩
+MICROCOMPACT_IDLE_S = 5 * 60  # 空闲 5 分钟后触发 Tier 3 清理（300 秒）
+KEEP_RECENT_RESULTS = 3  # 保留最近 3 个工具结果不被裁剪（防止删除有用上下文）
 
 
 def _get_max_output_tokens(model: str) -> int:
@@ -174,6 +187,8 @@ class AgentState:
     plan_file_path: str | None = None  # 磁盘上 Plan Markdown 文件的绝对路径
     context_cleared: bool = False  # 新增：上下文是否被清除的标志
     aborted: bool = False  # 新增：中断标志位
+    last_input_token_count: int = 0  # 最近一次 API 返回的输入 Token 数
+    last_api_call_time: float | None = None  # 最近一次 API 调用的时间戳
 
 class MessageHistory:
     """统一 Anthropic/OpenAI 消息格式的抽象层"""
@@ -264,6 +279,14 @@ class MessageHistory:
             "tool_call_id": tool_call_id,
             "content": content,
         })
+
+    def replace_anthropic_messages(self, messages: list[dict]) -> None:
+        """Replace all Anthropic messages (used during compaction)."""
+        self._anthropic_messages = messages
+
+    def replace_openai_messages(self, messages: list[dict]) -> None:
+        """Replace all OpenAI messages (used during compaction)."""
+        self._openai_messages = messages
             
 def _to_openai_tools(tools: list[dict]) -> list[dict]:
     """将 Anthropic 格式的工具定义转换为 OpenAI 格式
@@ -309,6 +332,9 @@ class Agent:
         # 流式输出缓冲区，用于在流式模式下收集助手文本，直到完整输出结束
         self._output_buffer: list[str] | None = None
 
+        #计算并保存有效窗口边界
+        self.effective_window = _get_max_output_tokens(backend.model) - CONTEXT_WINDOW_SAFETY_MARGIN
+
     @property
     def is_processing(self) -> bool:
         """判断 Agent 是否正在执行任务（供 SIGINT 信号处理器使用）"""
@@ -320,6 +346,15 @@ class Agent:
         if mode in ("disabled", "adaptive", "enabled"):
             return mode
         return "disabled"
+
+    def _update_system_prompt(self) -> None:
+        """重新构建系统提示词并同步到底层存储。
+
+        当前实现：直接调用 build_system_prompt() 重建。
+        第 12 课将扩展：支持 custom_system_prompt 和 plan mode 提示词拼接。
+        """
+        self._system_prompt = build_system_prompt()
+        self.history.update_system_prompt(self._system_prompt)
 
     def abort(self) -> None:
         """设置中断标志，供信号处理器调用以终止当前任务。"""
@@ -340,6 +375,25 @@ class Agent:
         except KeyboardInterrupt:
             print("\n  [red]Operation cancelled.[/red]")
             return False
+        
+    async def compact(self) -> None:
+        """手动触发压缩的公共接口（供 /compact 命令调用）。"""
+        await self._compact_conversation()
+
+    async def _compact_conversation(self) -> None:
+        """根据后端类型分发到对应的压缩实现。"""
+        if self.use_openai:
+            await self._compact_openai()
+        else:
+            await self._compact_anthropic()
+        print_info("Conversation compacted.")
+
+        
+    async def _check_and_compact(self) -> None:
+        """检查是否需要自动压缩：当 Token 占用率超过 85% 时触发。"""
+        if self.state.last_input_token_count > self.effective_window * AUTOCOMPACT_THRESHOLD:
+            print("\n  [yellow]⚠️  Context approaching limit, auto-compacting...[/yellow]")
+            await self._compact_conversation()
 
     async def chat(self, user_message: str) -> None:
         """封装公共的对外对话方法，提供自动保存和异常隔离。"""
@@ -390,10 +444,16 @@ class Agent:
         #  把用户消息推入历史
         self.history.append_user_message(user_message)
 
+        await self._check_and_compact()
+
         while True:
+            if self._aborted:
+                break
             # 动态编译最新的系统提示词
-            current_system_prompt = build_system_prompt()
-            
+            self._update_system_prompt()
+            # 执行三级压缩流水线（Tier 1/2/3），在每次 API 调用前清理冗余数据
+            self._run_compression_pipeline()
+
             # 抢跑任务注册表：{ tool_use_id -> asyncio.Task }
             # 用于在流式结束后直接 await 已启动的后台任务
             early_executions: dict[str, asyncio.Task] = {}
@@ -413,6 +473,9 @@ class Agent:
 
             # 将回调传入流式 API 调用，每个工具块完成时都会触发
             response = await self._call_anthropic_stream(on_tool_block_complete=_on_tool_block_complete)
+
+            # 请求成功后更新 Token 计数（供压缩系统判断是否需要触发）
+            self.state.last_input_token_count = response.usage.input_tokens
 
             # 将助手消息（含文本和工具调用）追加到历史记录
             self.history.append_assistant_message(
@@ -488,7 +551,6 @@ class Agent:
 
             # 将所有工具执行结果追加到历史，供下一轮对话使用 
             self.history.append_tool_results(tool_results)   
-
                     
     @staticmethod
     def _block_to_dict(block) -> dict:
@@ -511,12 +573,23 @@ class Agent:
         # 1. 用户消息推入历史
         self.history.append_user_message(user_message)
 
+        # 2. 在轮次边界（Turn Boundary）检查是否需要自动压缩
+        await self._check_and_compact()
+
         while True:
+            if self._aborted:
+                break
             # 动态编译最新的系统提示词
-            current_system_prompt = build_system_prompt()
-            self.history.update_system_prompt(current_system_prompt)
+            self._update_system_prompt()
+            # 执行三级压缩流水线（Tier 1/2/3）
+            self._run_compression_pipeline()
             # 2. 调用 OpenAI 兼容 API（使用流式调用以支持 thinking 显示）
             response = await self._call_openai_stream()
+
+            # 请求成功后更新 Token 计数（供压缩系统判断是否需要触发）
+            if response.get("usage"):
+                self.state.last_input_token_count = response["usage"]["prompt_tokens"]
+
             message = response["choices"][0]["message"]
 
             # 3. 构造 assistant 回复——必须保留 tool_calls 结构，否则后续 tool 消息会报协议错误
@@ -615,31 +688,6 @@ class Agent:
         self.state.context_cleared = False
         return False
 
-    def _persist_large_result(self, tool_name: str, result: str) -> str:
-        """当工具结果超过阈值时，将完整内容保存到磁盘并返回预览摘要。"""
-        # 小结果直接返回，避免不必要的磁盘 IO
-        if len(result) <= LARGE_RESULT_THRESHOLD:
-            return result
-        # 创建工具结果存储目录
-        d = Path.cwd() / ".mini-claude" / "tool-results"
-        d.mkdir(parents=True, exist_ok=True)
-        # 文件名包含毫秒时间戳和工具名，便于事后追溯
-        filename = f"{int(time.time() * 1000)}-{tool_name}.txt"
-        filepath = d / filename
-        filepath.write_text(result, encoding="utf-8")
-
-        lines = result.split("\n")
-        preview = "\n".join(lines[:LARGE_RESULT_PREVIEW_LINES])
-        # 使用字节数而非字符数衡量，确保中文等多字节字符被正确计算
-        size_kb = len(result.encode()) / 1024
-
-        return (
-            f"[Result too large ({size_kb:.1f} KB, {len(lines)} lines). "
-            f"Full output saved to {filepath}. "
-            f"You can use read_file to see the full result.]\n\n"
-            f"Preview (first {LARGE_RESULT_PREVIEW_LINES} lines):\n{preview}"
-        )
-    
     async def _execute_tool_call(self, name: str, args: dict) -> str:
         """执行工具调用的封装方法，便于后续添加日志、权限检查等逻辑。"""
         return await execute_tool(name, args)
@@ -886,3 +934,311 @@ class Agent:
         # 使用步骤 4 实现的重试方法进行包裹，处理瞬时网络故障
         return await _with_retry(_do)
 
+    async def _compact_anthropic(self) -> None:
+        """Anthropic 后端压缩：利用大模型自身能力总结历史对话。"""
+        messages = self.history.anthropic_messages
+        if len(messages) <= 4:
+            print("  [cyan]ℹ Conversation too short to compact.[/cyan]")
+            return
+        
+        # 1. 备份最后一条用户消息（当前正在处理的请求)
+        last_user_msg = messages[-1] if messages and messages[-1]["role"] == "user" else None
+        # 2. 向上游 API 请求总结（排除最后一条用户消息，避免重复）
+        response = await self._client.messages.create(
+            model=self.backend.model,
+            max_tokens=2048,
+            system="Summarize the following conversation between a user and an assistant. Focus on key information, decisions, and context relevant for future interactions. Be concise but comprehensive.",
+            messages=[
+                *messages[:-1],  # 排除最后一条用户消息
+                {"role": "user", "content": "Summarize the conversation so far in a concise paragraph, preserving key decisions, file paths, and context needed to continue the work."},
+            ],
+        )
+        summary = (
+            response.content[0].text
+            if response.content and response.content[0].type == "text" and hasattr(response.content[0], "text")
+            else "Summary unavailable."
+        )
+
+        # 3. 重塑消息历史队列：用摘要对替换原始历史
+        new_messages = [
+            {"role": "user", "content": f"[Previous conversation summary]\n{summary}"},
+            {
+                "role": "assistant",
+                "content": "Understood. I have the context from our previous conversation. How can I continue helping?",
+            },
+        ]
+
+         # 4. 将最新用户请求重新接驳到历史队列末端，确保当前轮继续正常处理
+
+        if last_user_msg:
+            new_messages.append(last_user_msg)
+
+         # 使用 MessageHistory 公共方法进行安全替换，不直接修改私有列表
+        self.history.replace_anthropic_messages(new_messages)
+
+        # 重置 Token 计数器，让下次检查重新开始计数
+        self.state.last_input_token_count = 0
+
+    async def _compact_openai(self) -> None:
+        """OpenAI 后端压缩：利用大模型自身能力总结历史对话。"""
+        messages = self.history.openai_messages
+        if len(messages) <= 4:
+            print("  [cyan]ℹ Conversation too short to compact.[/cyan]")
+            return
+        
+        # 1. 备份首位 system 消息（必须保持在队列首位）和末位 user 消息
+        system_msg = messages[0]
+        last_user_msg = messages[-1]
+
+        # 2. 向上游 API 请求总结（排除 system 和最后一条用户消息，避免重复）
+        response = await self._client.chat.completions.create(
+            model=self.backend.model,
+            max_tokens=2048,
+            messages=[
+                {"role": "system", "content": "Summarize the following conversation between a user and an assistant. Focus on key information, decisions, and context relevant for future interactions. Be concise but comprehensive."},
+                *messages[1:-1],  # 排除首位 system 消息和最后一条用户消息
+                {"role": "user", "content": "Summarize the conversation so far in a concise paragraph, preserving key decisions, file paths, and context needed to continue the work."},
+            ],
+        )
+        summary = response.choices[0].message.content or "Summary unavailable."
+
+        # 3. 重塑消息历史队列：用摘要对替换原始历史
+        new_messages = [
+            system_msg,  # OpenAI 协议要求 system 消息必须在队列首位
+            {"role": "user", "content": f"[Previous conversation summary]\n{summary}"},
+            {
+                "role": "assistant",
+                "content": "Understood. I have the context from our previous conversation. How can I continue helping?",
+            },
+        ]
+
+         # 4. 将最新用户请求重新接驳到历史队列末端，确保当前轮继续正常处理
+
+        if last_user_msg:
+            new_messages.append(last_user_msg)
+
+         # 使用 MessageHistory 公共方法进行安全替换，不直接修改私有列表
+        self.history.replace_openai_messages(new_messages)
+
+        # 重置 Token 计数器，让下次检查重新开始计数
+        self.state.last_input_token_count = 0
+
+    def _run_compression_pipeline(self) -> None:
+        """执行三级压缩流水线：Tier 1（预算裁剪）-> Tier 2（陈旧替换）-> Tier 3（空闲清理）。"""
+        if self.use_openai:
+            self._budget_tool_results_openai()
+            self._snip_stale_results_openai()
+            self._microcompact_openai()
+        else:
+            self._budget_tool_results_anthropic()
+            self._snip_stale_results_anthropic()
+            self._microcompact_anthropic()
+
+    # ─── Tier 1: Budget tool results（预算裁剪）────────────────
+    def _budget_tool_results_anthropic(self) -> None:
+        """利用率 50% 时裁剪过长的单个工具结果，保留首尾部分。"""
+        utilization = self.state.last_input_token_count / self.effective_window
+        if utilization < 0.5:
+            return  # 低于 50% 不触发预算裁剪
+        # 利用率越高，预算越紧：50%-70% 用 30k，超过 70% 收紧到 15k
+        budget = 30000 if utilization < 0.7 else 15000
+        for msg in self.history.anthropic_messages:
+            if msg["role"] != "user" or not isinstance(msg["content"], list):
+                continue
+            for block in msg["content"]:
+                if block.type == "tool_result" and hasattr(block, "text") and len(block.text) > budget:
+                    # 保留首尾各一半空间，中间部分用截断标记替换
+                    keep = (budget - 80) // 2
+                    block["content"] = (
+                        block["content"][:keep]
+                        + f"\n\n[... budgeted: {len(block['content']) - keep * 2} chars truncated ...]\n\n"
+                        + block["content"][-keep:]
+                    )
+
+    def _budget_tool_results_openai(self) -> None:
+        """OpenAI 后端的 Tier 1 裁剪逻辑。"""
+        utilization = self.state.last_input_token_count / self.effective_window
+        if utilization < 0.5:
+            return  # 低于 50% 不触发预算裁剪
+        budget = 30000 if utilization < 0.7 else 15000
+        for msg in self.history.openai_messages:
+            if msg["role"] != "tool":
+                continue
+            content = msg.get("content", "")
+            if content and len(content) > budget:
+                keep = (budget - 80) // 2
+                msg["content"] = (
+                    content[:keep]
+                    + f"\n\n[... budgeted: {len(content) - keep * 2} chars truncated ...]\n\n"
+                    + content[-keep:]
+                )
+
+    # ─── Tier 2: Snip stale results（陈旧结果替换）─────────────
+    def _snip_stale_results_anthropic(self) -> None:
+        """利用率 60% 时将旧的工具结果替换为占位符，保留最近 3 个。"""
+        utilization = self.state.last_input_token_count / self.effective_window
+        if utilization < 0.6:
+            return  # 低于 60% 不触发陈旧替换
+        
+         # 收集所有可裁剪的工具结果（排除已裁剪的和非可裁剪工具）
+        results = []
+        for mi, msg in enumerate(self.history.anthropic_messages):
+            if msg["role"] != "user" or not isinstance(msg["content"], list):
+                continue
+            for bi, block in enumerate(msg["content"]):
+                if isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("content"), str) and block["content"] != SNIP_PLACEHOLDER:
+                    tool_use_id = block.get("tool_use_id", "")
+                    tool_info = self._find_tool_use_by_id(tool_use_id)
+                    # 只有 SNIPPABLE_TOOLS 中的工具结果才可裁剪
+                    if tool_info and tool_info["name"] in SNIPPABLE_TOOLS:
+                        results.append({"mi": mi, "bi": bi, "name": tool_info["name"], "file_path": tool_info.get("input", {}).get("path")})
+        
+        if len(results) <= KEEP_RECENT_RESULTS:
+            return  # 不足以裁剪，保留全部
+        
+        # 标记需要裁剪的索引
+        to_snip = set()
+        seen_files: dict[str, list[int]] = {}
+        for i, r in enumerate(results):
+            if r["name"] =="read_file" and r["path"]:
+                seen_files.setdefault(r["path"], []).append(i)
+
+        # 同一文件的多次读取，只保留最后一次（前面的已过时）
+        for indices in seen_files.values():
+            if len(indices) > 1:
+                for idx in indices[:-1]:  # 保留最后一次
+                    to_snip.add(idx)
+
+        # 裁剪超出保留数量的旧结果
+        snip_before = len(results) - KEEP_RECENT_RESULTS
+        for i in range(snip_before):
+            to_snip.add(i)
+
+        # 执行裁剪：替换为占位符
+        for idx in to_snip:
+            r = results[idx]
+            self.history.anthropic_messages[r["mi"]]["content"][r["bi"]]["content"] = SNIP_PLACEHOLDER
+
+    def _snip_stale_results_openai(self) -> None:
+        """OpenAI 后端的 Tier 2 裁剪逻辑。"""
+        utilization = self.state.last_input_token_count / self.effective_window if self.effective_window else 0
+        if utilization < SNIP_THRESHOLD:
+            return
+
+        # 收集所有可裁剪的工具结果（排除已裁剪的和非可裁剪工具）
+        results = []
+        for i, msg in enumerate(self.history.openai_messages):
+            if msg.get("role") == "tool" and isinstance(msg.get("content"), str) and msg["content"] != SNIP_PLACEHOLDER:
+                tool_call_id = msg.get("tool_call_id", "")
+                tool_info = self._find_tool_call_by_id(tool_call_id)
+                # 只有 SNIPPABLE_TOOLS 中的工具结果才可裁剪
+                if tool_info and tool_info["name"] in SNIPPABLE_TOOLS:
+                    results.append({"i": i, "name": tool_info["name"], "file_path": tool_info.get("arguments", {}).get("path")})
+
+        if len(results) <= KEEP_RECENT_RESULTS:
+            return
+
+        # 标记需要裁剪的索引
+        to_snip = set()
+        seen_files: dict[str, list[int]] = {}
+        for idx, r in enumerate(results):
+            if r["name"] == "read_file" and r.get("file_path"):
+                seen_files.setdefault(r["file_path"], []).append(idx)
+
+        # 同一文件的多次读取，只保留最后一次（前面的已过时）
+        for indices in seen_files.values():
+            if len(indices) > 1:
+                for j in indices[:-1]:
+                    to_snip.add(j)
+
+        # 裁剪超出保留数量的旧结果
+        snip_before = len(results) - KEEP_RECENT_RESULTS
+        for i in range(snip_before):
+            to_snip.add(i)
+
+        # 执行裁剪：将选中的结果内容替换为占位符
+        for idx in to_snip:
+            self.history.openai_messages[results[idx]["i"]]["content"] = SNIP_PLACEHOLDER
+
+    # ─── Tier 3: Microcompact（空闲清理）───────────────────────
+    def _microcompact_anthropic(self) -> None:
+        """空闲 5 分钟后清除所有旧结果为占位符。"""
+        # 检查是否已空闲足够长时间
+        if not self.state.last_api_call_time or (time.time() - self.state.last_api_call_time) < MICROCOMPACT_IDLE_S:
+            return
+        # 收集所有未被清理的 tool_result 位置
+        all_results = []
+        for mi, msg in enumerate(self.history.anthropic_messages):
+            if msg["role"] != "user" or not isinstance(msg["content"], list):
+                continue
+            for bi, block in enumerate(msg["content"]):
+                if isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("content"), str) and block["content"] not in (SNIP_PLACEHOLDER, "[Old result cleared]"):
+                    all_results.append((mi, bi))
+        # 清理旧结果，保留最近 3 个
+        clear_count = len(all_results) - KEEP_RECENT_RESULTS
+        for i in range(max(0, clear_count)):
+            mi, bi = all_results[i]
+            self.history.anthropic_messages[mi]["content"][bi]["content"] = "[Old result cleared]"
+    
+    def _microcompact_openai(self) -> None:
+        """OpenAI 后端的 Tier 3 清理逻辑。"""
+        # 检查是否已空闲足够长时间
+        if not self.state.last_api_call_time or (time.time() - self.state.last_api_call_time) < MICROCOMPACT_IDLE_S:
+            return
+        # 收集所有未被清理的工具结果位置
+        all_results = []
+        for i, msg in enumerate(self.history.openai_messages):
+            if msg.get("role") == "tool" and isinstance(msg.get("content"), str) and msg["content"] not in (SNIP_PLACEHOLDER, "[Old result cleared]"):
+                all_results.append(i)
+        # 清理旧结果，保留最近 3 个
+        clear_count = len(all_results) - KEEP_RECENT_RESULTS
+        for i in range(max(0, clear_count)):
+            idx = all_results[i]
+            self.history.openai_messages[idx]["content"] = "[Old result cleared]"
+
+    # ─── Helper: 查找工具调用信息 ──────────────────────────────
+    def _find_tool_use_by_id(self, tool_use_id: str) -> dict | None:
+        """根据 tool_use_id 在历史中反向查找对应的工具调用（用于 Tier 2 判断工具类型）。"""
+        for msg in reversed(self.history.anthropic_messages):
+            if msg["role"] != "assistant" or not isinstance(msg["content"], list):
+                continue
+            for block in msg["content"]:
+                if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") == tool_use_id:
+                    return {"name": block.get("name"), "input": block.get("input")}
+        return None
+    
+    def _find_tool_call_by_id(self, tool_call_id: str) -> dict | None:
+        """根据 tool_call_id 在 OpenAI 历史中反向查找对应的工具调用（用于 Tier 2 判断工具类型）。"""
+        for msg in reversed(self.history.openai_messages):
+            if msg.get("role") != "assistant" or not msg.get("tool_calls"):
+                continue
+            for tc in msg["tool_calls"]:
+                if tc.get("id") == tool_call_id:
+                    return {"name": tc.get("function", {}).get("name"), "arguments": json.loads(tc.get("function", {}).get("arguments", "{}"))}
+        return None
+    
+     # ─── Large result persistence（大结果持久化）────────────────
+    def _persist_large_result(self, tool_name: str, result: str) -> str:
+        """将超大工具结果（>30KB）保存到本地文件，只在历史中保留预览。"""
+        if len(result.encode()) <= LARGE_RESULT_THRESHOLD:
+            return result  # 未超阈值，直接返回原文
+        # 确保存储目录存在
+        d = Path.cwd() / ".mini-claude" / "tool-results"
+        d.mkdir(parents=True, exist_ok=True)
+        # 用时间戳和工具名生成唯一文件名
+        filename = f"{int(time.time() * 1000)}-{tool_name}.txt"
+        filepath = d / filename
+        filepath.write_text(result, encoding="utf-8")
+
+        # 生成预览：只保留前 200 行
+        lines = result.split("\n")
+        preview = "\n".join(lines[:LARGE_RESULT_PREVIEW_LINES])
+        size_kb = len(result.encode()) / 1024
+
+        # 返回摘要信息 + 预览，引导用户用 read_file 查看完整内容
+        return (
+            f"[Result too large ({size_kb:.1f} KB, {len(lines)} lines). "
+            f"Full output saved to {filepath}. "
+            f"You can use read_file to see the full result.]\n\n"
+            f"Preview (first {LARGE_RESULT_PREVIEW_LINES} lines):\n{preview}"
+        )

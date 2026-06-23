@@ -359,15 +359,9 @@ def _matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
     if rule["pattern"] is None:
         return True  # 无参数限制，工具名匹配即生效
     
-    # 根据工具类型提取用于匹配的值
-    value = ""
-    if tool_name == "run_shell":
-        value = inp.get("command", "")
-    elif "path" in inp:
-        value = inp["path"]
-    else:
-        return True  # 对于其他工具，若规则指定了参数但工具没有对应参数，则视为匹配
-
+    value = inp.get("command") or inp.get("file_path") or inp.get("path", "")
+    if not value:
+        return True  # 没有可匹配的值时，视为匹配所有规则
     pattern = rule["pattern"]
     # 支持 * 通配符前缀匹配（如 "npm test*" 匹配 "npm test --coverage"）
     if pattern.endswith("*"):

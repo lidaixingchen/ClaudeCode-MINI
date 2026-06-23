@@ -157,6 +157,14 @@ async def run_repl(agent: Agent) -> None:
             agent.clear_history()
             continue
 
+        if inp == "/compact":
+            try:
+                await agent.compact()
+            except Exception as e:
+                # 捕获异常避免网络故障导致 REPL 闪退
+                print(f"  [red]Error: {e}[/red]")
+            continue
+
         # ── 普通对话：将用户输入发送给 Agent ──
         try:
             await agent.chat(inp)
