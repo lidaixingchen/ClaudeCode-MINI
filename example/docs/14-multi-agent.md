@@ -332,6 +332,130 @@ Token 消耗要使用增量计算（`self.state.total_input_tokens - prev_in`）
 
 ---
 
+#### 进阶优化：结构化输出与提取
+
+##### 为什么做
+
+当前实现会捕获子代理的**所有**文本输出，包括中间过程的分析、工具调用说明等。这会导致主代理的上下文被大量中间信息污染。
+
+参考 OpenAI Agents SDK 的 `custom_output_extractor` 设计，我们可以通过结构化输出来解决这个问题：
+
+- 子代理使用 `<result>` 标签标记最终输出
+- 主代理只提取标签内的内容，过滤掉中间过程
+
+##### 做什么
+
+1. **添加输出格式指导**：在 `subagent.py` 中定义 `OUTPUT_FORMAT_INSTRUCTION` 常量，并在 `get_sub_agent_config()` 中统一注入（确保自定义代理也能获得格式指导）
+
+```python
+# subagent.py
+
+OUTPUT_FORMAT_INSTRUCTION = """
+
+=== OUTPUT FORMAT ===
+After completing your task, wrap your final summary in these exact tags:
+
+<result>
+Your concise findings here. Include:
+- Key discoveries or actions taken
+- File paths with line references (if applicable)
+- Essential information for the caller
+</result>
+
+IMPORTANT:
+- Everything outside <result> tags will be DISCARDED
+- Focus on tool usage during execution, minimize commentary
+- Only the content inside <result> tags reaches the main agent
+- Use ONE <result> tag only. If reporting multiple items, include all inside a single tag.
+"""
+```
+
+2. **添加提取逻辑**：在 `agent.py` 中实现 `_extract_result` 静态方法
+
+```python
+# agent.py
+
+    @staticmethod
+    def _extract_result(raw_text: str) -> str:
+        """从原始输出中提取 <result> 标签内的内容。
+
+        如果找到 <result> 标签，返回最后一个标签内的内容（假设是最终版本）；
+        否则返回原始文本（兼容不遵循格式的子代理）。
+        """
+        matches = re.findall(r'<result>\s*(.*?)\s*</result>', raw_text, re.DOTALL)
+        if matches:
+            # 取最后一个，假设是子代理的最终修正版本
+            return matches[-1].strip()
+        # 兼容模式：如果没有标识符，返回原始文本
+        return raw_text
+```
+
+1. **修改 `run_once`**：添加 `keep_raw` 参数，调用提取逻辑
+
+```python
+# agent.py
+
+    async def run_once(self, prompt: str, keep_raw: bool = False) -> dict:
+        """子代理一次性运行接口。
+
+        Args:
+            prompt: 任务描述
+            keep_raw: 是否保留原始输出（调试用）
+        """
+        self.state.output_buffer = []
+        prev_in = self.state.total_input_tokens
+        prev_out = self.state.total_output_tokens
+
+        await self.chat(prompt)
+
+        raw_text = "".join(self.state.output_buffer)
+        self.state.output_buffer = None
+
+        # 提取 <result> 标签内的内容
+        result_text = self._extract_result(raw_text)
+
+        result = {
+            "text": result_text,
+            "tokens": {
+                "input": self.state.total_input_tokens - prev_in,
+                "output": self.state.total_output_tokens - prev_out,
+            },
+        }
+
+        # 可选保留原始输出
+        if keep_raw:
+            result["raw_text"] = raw_text
+
+        return result
+```
+
+##### 提取逻辑注意事项
+
+- **向后兼容**：如果子代理不遵循格式，`_extract_result` 会返回原始文本
+- **调试支持**：`keep_raw=True` 可以保留原始输出，方便调试
+- **System Prompt 统一注入**：通过 `get_sub_agent_config()` 统一添加，确保自定义代理也能获得格式指导
+- **多标签处理**：如果子代理输出多个 `<result>` 标签，取最后一个（假设是最终修正版本）
+
+##### 设计权衡
+
+| 方案 | 优点 | 缺点 |
+| --- | --- | --- |
+| 结构化输出（本方案） | 精确过滤，只返回结果 | 需要子代理遵循格式 |
+| 原始输出（改造前） | 简单，无需格式约束 | 带回所有中间过程 |
+| 自定义提取器 | 灵活，可适配任意格式 | 实现复杂，教学成本高 |
+
+##### 多标签处理策略
+
+| 策略 | 做法 | 适用场景 |
+| --- | --- | --- |
+| 取第一个 | `re.search` 只匹配第一个 | 子代理可能"废话"在前，真正结果在后 |
+| **取最后一个（采用）** | `re.findall` 取最后一个 | 子代理可能修正结果，最终版本最准确 |
+| 全部拼接 | `re.findall` 拼接所有 | 多文件/多任务场景，每个都是独立结果 |
+
+**选择理由**：子代理输出多个标签时，通常意味着修正或补充，最终版本最可靠。
+
+---
+
 ### 步骤 5：实现子代理的执行与权限继承逻辑
 
 #### 为什么做

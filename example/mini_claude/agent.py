@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -706,22 +707,72 @@ class Agent:
             print_divider()
             self._auto_save()
 
+    # ─── Output extraction ──────────────────────────────────
+
+    @staticmethod
+    def _extract_result(raw_text: str) -> str:
+        """从原始输出中提取 <result> 标签内的内容。
+
+        如果找到 <result> 标签，返回最后一个标签内的内容（假设是最终版本）；
+        否则返回原始文本（兼容不遵循格式的子代理）。
+
+        Args:
+            raw_text: 子代理的原始输出文本
+
+        Returns:
+            提取后的内容，或原始文本（如果未找到标签）
+        """
+        matches = re.findall(r'<result>\s*(.*?)\s*</result>', raw_text, re.DOTALL)
+        if matches:
+            # 取最后一个，假设是子代理的最终修正版本
+            return matches[-1].strip()
+        # 兼容模式：如果没有标识符，返回原始文本
+        return raw_text
+
     # ─── Sub-agent entry point ────────────────────────────────
 
-    async def run_once(self, prompt: str) -> dict:
+    async def run_once(self, prompt: str, keep_raw: bool = False) -> dict:
+        """子代理一次性运行接口。
+
+        Args:
+            prompt: 任务描述
+            keep_raw: 是否保留原始输出（调试用）
+
+        Returns:
+            {
+                "text": str,           # 提取后的结果
+                "raw_text": str | None, # 原始输出（仅当 keep_raw=True）
+                "tokens": {
+                    "input": int,
+                    "output": int,
+                }
+            }
+        """
         self.state.output_buffer = []
         prev_in = self.state.total_input_tokens
         prev_out = self.state.total_output_tokens
+
         await self.chat(prompt)
-        text = "".join(self.state.output_buffer)
+
+        raw_text = "".join(self.state.output_buffer)
         self.state.output_buffer = None
-        return {
-            "text": text,
+
+        # 提取 <result> 标签内的内容
+        result_text = self._extract_result(raw_text)
+
+        result = {
+            "text": result_text,
             "tokens": {
                 "input": self.state.total_input_tokens - prev_in,
                 "output": self.state.total_output_tokens - prev_out,
             },
         }
+
+        # 可选保留原始输出
+        if keep_raw:
+            result["raw_text"] = raw_text
+
+        return result
 
     # ─── Output helper ────────────────────────────────────────
 

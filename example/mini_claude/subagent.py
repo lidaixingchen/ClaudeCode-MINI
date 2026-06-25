@@ -9,6 +9,27 @@ from pathlib import Path
 from .frontmatter import parse_frontmatter
 from .tools import tool_definitions, ToolDef
 
+# ─── Output format instruction ──────────────────────────────
+
+OUTPUT_FORMAT_INSTRUCTION = """
+
+=== OUTPUT FORMAT ===
+After completing your task, wrap your final summary in these exact tags:
+
+<result>
+Your concise findings here. Include:
+- Key discoveries or actions taken
+- File paths with line references (if applicable)
+- Essential information for the caller
+</result>
+
+IMPORTANT:
+- Everything outside <result> tags will be DISCARDED
+- Focus on tool usage during execution, minimize commentary
+- Only the content inside <result> tags reaches the main agent
+- Use ONE <result> tag only. If reporting multiple items, include all inside a single tag.
+"""
+
 # ─── Read-only tools (for explore and plan agents) ──────────
 
 READ_ONLY_TOOLS = {"read_file", "list_files", "grep_search"}
@@ -128,16 +149,18 @@ def get_sub_agent_config(agent_type: str) -> dict:
             tools = [t for t in tool_definitions if t["name"] in custom["allowed_tools"]]
         else:
             tools = [t for t in tool_definitions if t["name"] != "agent"]
-        return {"system_prompt": custom["system_prompt"], "tools": tools}
+        # 统一注入输出格式指导（包括自定义代理）
+        system_prompt = custom["system_prompt"] + OUTPUT_FORMAT_INSTRUCTION
+        return {"system_prompt": system_prompt, "tools": tools}
 
     read_only = [t for t in tool_definitions if t["name"] in READ_ONLY_TOOLS]
 
     if agent_type == "explore":
-        return {"system_prompt": EXPLORE_PROMPT, "tools": read_only}
+        return {"system_prompt": EXPLORE_PROMPT + OUTPUT_FORMAT_INSTRUCTION, "tools": read_only}
     elif agent_type == "plan":
-        return {"system_prompt": PLAN_PROMPT, "tools": read_only}
+        return {"system_prompt": PLAN_PROMPT + OUTPUT_FORMAT_INSTRUCTION, "tools": read_only}
     else:  # general
-        return {"system_prompt": GENERAL_PROMPT, "tools": [t for t in tool_definitions if t["name"] != "agent"]}
+        return {"system_prompt": GENERAL_PROMPT + OUTPUT_FORMAT_INSTRUCTION, "tools": [t for t in tool_definitions if t["name"] != "agent"]}
 
 
 # ─── Available agent types (for system prompt) ──────────────
