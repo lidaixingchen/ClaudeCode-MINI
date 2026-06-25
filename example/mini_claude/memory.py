@@ -4,7 +4,6 @@ Mirrors Claude Code's memory architecture: semantic recall via sideQuery."""
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -43,12 +42,8 @@ class MemoryEntry:
 # ─── Paths ──────────────────────────────────────────────────
 
 
-def _project_hash() -> str:
-    return hashlib.sha256(str(Path.cwd()).encode()).hexdigest()[:16]
-
-
 def get_memory_dir() -> Path:
-    d = Path.cwd() / ".mini-claude" / "projects" / _project_hash() / "memory"
+    d = Path.cwd() / ".mini-claude" / "memory"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

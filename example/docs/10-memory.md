@@ -17,7 +17,7 @@
 
 ## 🛠️ 本节任务
 
-1. **实现项目哈希物理隔离**：在 `memory.py` 中编写 `_project_hash()` 和 `get_memory_dir()`，使每个项目目录都映射到独立的存储路径。
+1. **实现记忆目录管理**：在 `memory.py` 中编写 `get_memory_dir()`，将记忆文件存放在当前项目目录下的 `.mini-claude/memory/` 中。
 2. **编写 YAML Frontmatter 解析器**：在 `frontmatter.py` 中实现 `FrontmatterResult` 数据类和 `parse_frontmatter`/`format_frontmatter`，供 `memory.py` 和第 11 课的 `skills.py` 共享复用。
 3. **实现索引文件自动重建**：实现 `_update_memory_index` 逻辑，在新增记忆时重新生成 `MEMORY.md` 索引。
 4. **实现记忆 CRUD 辅助函数**：编写 `save_memory`、`delete_memory`、`_slugify` 等辅助函数，统一记忆文件的增删操作。
@@ -32,11 +32,13 @@
 ## 📦 涉及文件
 
 修改：
-- `memory.py`
+
 - `prompt.py`
 - `agent.py`
 
 创建：
+
+- `memory.py`
 - `frontmatter.py`
 
 ---
@@ -47,7 +49,7 @@
 
 #### 为什么做
 
-如果用户在本地开发多个不同的项目，我们决不能让 A 项目的上下文记忆混入 B 项目中。我们需要通过计算当前工作目录（CWD）的 SHA-256 散列值，将记忆文件夹物理隔离存放在当前工作目录下的 `.mini-claude/projects/{hash}/memory` 中。
+如果用户在本地开发多个不同的项目，我们决不能让 A 项目的上下文记忆混入 B 项目中。由于每个项目都有独立的工作目录（CWD），记忆文件夹直接存放在当前工作目录下的 `.mini-claude/memory/` 中，天然实现了项目间的物理隔离。
 
 #### 做什么
 
@@ -58,7 +60,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 
@@ -85,15 +86,9 @@ class MemoryEntry:
 # ─── Paths ──────────────────────────────────────────────────
 
 
-def _project_hash() -> str:
-    """基于当前工作目录生成项目哈希值，用于记忆目录的物理隔离。"""
-    # 取前 16 位十六进制字符足够唯一，同时避免路径过长
-    return hashlib.sha256(str(Path.cwd()).encode()).hexdigest()[:16]
-
-
 def get_memory_dir() -> Path:
     """获取当前项目的记忆存储目录，不存在时自动创建。"""
-    d = Path.cwd() / ".mini-claude" / "projects" / _project_hash() / "memory"
+    d = Path.cwd() / ".mini-claude" / "memory"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -892,7 +887,7 @@ class Agent:
 
 - **方案 A**：**“寄生”文件读写**（我们所用）
   - 记忆就是普通的文件。大模型使用已有的 `write_file`/`edit_file` 和 `read_file` 读写记忆。
-  - **优点**：不需要编写任何新工具，降低了工具池的 Token 开销；且用户可以直接进入 `.mini-claude/projects/` 目录下用本地编辑器（VS Code/Vim）增删改记忆。
+  - **优点**：不需要编写任何新工具，降低了工具池的 Token 开销；且用户可以直接进入 `.mini-claude/memory/` 目录下用本地编辑器（VS Code/Vim）增删改记忆。
   - **缺点**：大模型需要先理解文件写入格式，写入的规范性依赖 System Prompt 的指引强度。
 - **方案 B**：**引入定制的 MemoryTool 工具**
   - 在 API 中暴露类似 `save_memory(key, val)` 的强约束工具。
@@ -919,9 +914,9 @@ for f in d.glob("*.md"):
 
 ### 2. 记忆没有按照项目做沙箱隔离
 
-如果简单把所有项目的记忆混着存在全局 `./.mini-claude/memory/` 目录下，一旦大模型在前端项目 A 下检索到后端项目 B 的命名规范或文件规则，就会产生严重的牛头不对马嘴的逻辑干扰。
+如果简单把所有项目的记忆混着存在同一个全局目录下，一旦大模型在前端项目 A 下检索到后端项目 B 的命名规范或文件规则，就会产生严重的牛头不对马嘴的逻辑干扰。
 
-**修正**：必须在路径中引入当前工作目录的 hash 值进行强物理隔离。
+**修正**：将记忆存放在当前工作目录下的 `.mini-claude/memory/` 中，由于不同项目的 CWD 本身就不同，天然实现了项目间的物理隔离。
 
 ---
 
