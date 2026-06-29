@@ -94,6 +94,7 @@ def get_memory_dir() -> Path:
 
 
 def _get_index_path() -> Path:
+    """获取记忆索引文件 MEMORY.md 的完整路径。"""
     return get_memory_dir() / "MEMORY.md"
 ```
 
